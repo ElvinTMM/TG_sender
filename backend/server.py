@@ -164,6 +164,35 @@ class TemplateResponse(BaseModel):
     created_at: str
     updated_at: Optional[str]
 
+class VoiceMessageCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    delay_minutes: int = 30  # Через сколько минут после прочтения отправлять
+
+class VoiceMessageResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    name: str
+    description: Optional[str]
+    filename: str
+    duration: Optional[float]
+    delay_minutes: int
+    is_active: bool
+    sent_count: int
+    created_at: str
+
+class FollowUpQueueResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    contact_id: str
+    contact_phone: str
+    contact_name: Optional[str]
+    status: str  # pending, sent, cancelled
+    read_at: str
+    scheduled_at: str
+    voice_message_id: Optional[str]
+    voice_message_name: Optional[str]
+
 class AnalyticsResponse(BaseModel):
     total_accounts: int
     active_accounts: int
@@ -901,6 +930,248 @@ def process_template(template: str, contact: dict) -> str:
     text = re.sub(r'\{([^{}]+\|[^{}]+)\}', replace_spintax, text)
     
     return text
+
+# ==================== VOICE MESSAGES ROUTES ====================
+
+import os
+import shutil
+from fastapi.responses import FileResponse
+
+UPLOAD_DIR = ROOT_DIR / "uploads" / "voice"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+@api_router.get("/voice-messages", response_model=List[VoiceMessageResponse])
+async def get_voice_messages(current_user: dict = Depends(get_current_user)):
+    messages = await db.voice_messages.find({"user_id": current_user["id"]}, {"_id": 0}).to_list(100)
+    return [VoiceMessageResponse(**m) for m in messages]
+
+@api_router.post("/voice-messages")
+async def upload_voice_message(
+    name: str,
+    file: UploadFile = File(...),
+    description: Optional[str] = None,
+    delay_minutes: int = 30,
+    current_user: dict = Depends(get_current_user)
+):
+    # Validate file type
+    allowed_types = ['.mp3', '.ogg', '.wav', '.m4a']
+    file_ext = os.path.splitext(file.filename)[1].lower()
+    if file_ext not in allowed_types:
+        raise HTTPException(status_code=400, detail=f"File type not allowed. Use: {', '.join(allowed_types)}")
+    
+    voice_id = str(uuid.uuid4())
+    filename = f"{voice_id}{file_ext}"
+    file_path = UPLOAD_DIR / filename
+    
+    # Save file
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    
+    # Get duration (simplified - would need proper audio library)
+    file_size = os.path.getsize(file_path)
+    estimated_duration = file_size / 16000  # Rough estimate
+    
+    voice_doc = {
+        "id": voice_id,
+        "user_id": current_user["id"],
+        "name": name,
+        "description": description,
+        "filename": filename,
+        "duration": round(estimated_duration, 1),
+        "delay_minutes": delay_minutes,
+        "is_active": True,
+        "sent_count": 0,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.voice_messages.insert_one(voice_doc)
+    
+    return VoiceMessageResponse(**{k: v for k, v in voice_doc.items() if k != "user_id"})
+
+@api_router.get("/voice-messages/{voice_id}/file")
+async def get_voice_file(voice_id: str, current_user: dict = Depends(get_current_user)):
+    voice = await db.voice_messages.find_one({"id": voice_id, "user_id": current_user["id"]})
+    if not voice:
+        raise HTTPException(status_code=404, detail="Voice message not found")
+    
+    file_path = UPLOAD_DIR / voice["filename"]
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="File not found")
+    
+    return FileResponse(file_path)
+
+@api_router.put("/voice-messages/{voice_id}/toggle")
+async def toggle_voice_message(voice_id: str, current_user: dict = Depends(get_current_user)):
+    voice = await db.voice_messages.find_one({"id": voice_id, "user_id": current_user["id"]})
+    if not voice:
+        raise HTTPException(status_code=404, detail="Voice message not found")
+    
+    new_status = not voice.get("is_active", True)
+    await db.voice_messages.update_one(
+        {"id": voice_id},
+        {"$set": {"is_active": new_status}}
+    )
+    return {"message": "Status updated", "is_active": new_status}
+
+@api_router.delete("/voice-messages/{voice_id}")
+async def delete_voice_message(voice_id: str, current_user: dict = Depends(get_current_user)):
+    voice = await db.voice_messages.find_one({"id": voice_id, "user_id": current_user["id"]})
+    if not voice:
+        raise HTTPException(status_code=404, detail="Voice message not found")
+    
+    # Delete file
+    file_path = UPLOAD_DIR / voice["filename"]
+    if file_path.exists():
+        os.remove(file_path)
+    
+    await db.voice_messages.delete_one({"id": voice_id})
+    return {"message": "Voice message deleted"}
+
+# ==================== FOLLOW-UP QUEUE ROUTES ====================
+
+@api_router.get("/followup-queue", response_model=List[FollowUpQueueResponse])
+async def get_followup_queue(
+    status: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    query = {"user_id": current_user["id"]}
+    if status:
+        query["status"] = status
+    
+    queue = await db.followup_queue.find(query, {"_id": 0}).sort("scheduled_at", 1).to_list(500)
+    return [FollowUpQueueResponse(**q) for q in queue]
+
+@api_router.post("/followup-queue/add-read-contacts")
+async def add_read_contacts_to_queue(
+    voice_message_id: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """Add all contacts with 'read' status to follow-up queue"""
+    voice = await db.voice_messages.find_one({"id": voice_message_id, "user_id": current_user["id"]})
+    if not voice:
+        raise HTTPException(status_code=404, detail="Voice message not found")
+    
+    # Find contacts that read but didn't respond
+    read_contacts = await db.contacts.find({
+        "user_id": current_user["id"],
+        "status": "read"
+    }, {"_id": 0}).to_list(1000)
+    
+    added = 0
+    for contact in read_contacts:
+        # Check if already in queue
+        existing = await db.followup_queue.find_one({
+            "contact_id": contact["id"],
+            "status": "pending"
+        })
+        if existing:
+            continue
+        
+        queue_doc = {
+            "id": str(uuid.uuid4()),
+            "user_id": current_user["id"],
+            "contact_id": contact["id"],
+            "contact_phone": contact["phone"],
+            "contact_name": contact.get("name"),
+            "voice_message_id": voice_message_id,
+            "voice_message_name": voice["name"],
+            "status": "pending",
+            "read_at": contact.get("read_at", datetime.now(timezone.utc).isoformat()),
+            "scheduled_at": (datetime.now(timezone.utc) + timedelta(minutes=voice["delay_minutes"])).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.followup_queue.insert_one(queue_doc)
+        added += 1
+    
+    return {"message": f"Added {added} contacts to queue", "added": added}
+
+@api_router.post("/followup-queue/process")
+async def process_followup_queue(current_user: dict = Depends(get_current_user)):
+    """Process pending follow-ups (simulate sending voice messages)"""
+    now = datetime.now(timezone.utc)
+    
+    # Find due items
+    due_items = await db.followup_queue.find({
+        "user_id": current_user["id"],
+        "status": "pending",
+        "scheduled_at": {"$lte": now.isoformat()}
+    }, {"_id": 0}).to_list(100)
+    
+    sent = 0
+    for item in due_items:
+        # Simulate sending voice message
+        success = random.random() > 0.1  # 90% success rate
+        
+        if success:
+            await db.followup_queue.update_one(
+                {"id": item["id"]},
+                {"$set": {"status": "sent", "sent_at": now.isoformat()}}
+            )
+            
+            # Update contact status
+            await db.contacts.update_one(
+                {"id": item["contact_id"]},
+                {"$set": {"status": "voice_sent"}}
+            )
+            
+            # Update voice message counter
+            if item.get("voice_message_id"):
+                await db.voice_messages.update_one(
+                    {"id": item["voice_message_id"]},
+                    {"$inc": {"sent_count": 1}}
+                )
+            
+            # Add to dialog
+            dialog = await db.dialogs.find_one({"contact_id": item["contact_id"]})
+            if dialog:
+                await db.dialogs.update_one(
+                    {"id": dialog["id"]},
+                    {"$push": {"messages": {
+                        "id": str(uuid.uuid4()),
+                        "direction": "outgoing",
+                        "type": "voice",
+                        "text": f"🎤 Голосовое сообщение: {item.get('voice_message_name', 'Без названия')}",
+                        "status": "delivered",
+                        "sent_at": now.isoformat()
+                    }}}
+                )
+            
+            sent += 1
+        else:
+            await db.followup_queue.update_one(
+                {"id": item["id"]},
+                {"$set": {"status": "failed"}}
+            )
+    
+    return {"message": f"Processed {len(due_items)} items, sent {sent}", "processed": len(due_items), "sent": sent}
+
+@api_router.delete("/followup-queue/{queue_id}")
+async def cancel_followup(queue_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.followup_queue.update_one(
+        {"id": queue_id, "user_id": current_user["id"], "status": "pending"},
+        {"$set": {"status": "cancelled"}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Queue item not found or already processed")
+    return {"message": "Cancelled"}
+
+@api_router.delete("/followup-queue")
+async def clear_followup_queue(current_user: dict = Depends(get_current_user)):
+    result = await db.followup_queue.delete_many({
+        "user_id": current_user["id"],
+        "status": {"$in": ["sent", "cancelled", "failed"]}
+    })
+    return {"message": f"Cleared {result.deleted_count} items"}
+
+# Simulate marking contacts as "read"
+@api_router.post("/contacts/{contact_id}/mark-read")
+async def mark_contact_read(contact_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.contacts.update_one(
+        {"id": contact_id, "user_id": current_user["id"]},
+        {"$set": {"status": "read", "read_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return {"message": "Marked as read"}
 
 @api_router.get("/")
 async def root():
