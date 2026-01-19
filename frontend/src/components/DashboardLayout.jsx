@@ -10,7 +10,8 @@ import {
   Menu,
   X,
   Bot,
-  MessageSquare
+  MessageSquare,
+  FileText
 } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from './ui/button';
@@ -19,6 +20,7 @@ const navItems = [
   { to: '/dashboard', icon: LayoutDashboard, label: 'Дашборд' },
   { to: '/accounts', icon: Users, label: 'Аккаунты' },
   { to: '/contacts', icon: Phone, label: 'Контакты' },
+  { to: '/templates', icon: FileText, label: 'Шаблоны' },
   { to: '/campaigns', icon: Send, label: 'Рассылки' },
   { to: '/dialogs', icon: MessageSquare, label: 'Диалоги' },
   { to: '/analytics', icon: BarChart3, label: 'Аналитика' },
