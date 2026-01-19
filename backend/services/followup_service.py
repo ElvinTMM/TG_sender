@@ -1,12 +1,16 @@
 """
-Follow-up service - handles "read but not replied" logic
+Follow-up service - handles "read but not replied" logic with REAL Telegram sending
 """
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any
 import uuid
-import random
+import asyncio
+import logging
 
-from config import db
+from config import db, UPLOAD_DIR
+from services.telegram_service import send_voice_message
+
+logger = logging.getLogger(__name__)
 
 
 async def get_read_not_replied_contacts(user_id: str) -> list:
@@ -63,10 +67,10 @@ async def add_to_followup_queue(user_id: str, voice_message_id: str) -> Dict[str
 
 
 async def process_followup_queue(user_id: str) -> Dict[str, Any]:
-    """Process pending follow-ups (send voice messages)"""
+    """Process pending follow-ups - REAL voice message sending via Telegram"""
     now = datetime.now(timezone.utc)
     
-    # Find all pending items (regardless of scheduled time - manual trigger)
+    # Find all pending items
     pending_items = await db.followup_queue.find({
         "user_id": user_id,
         "status": "pending"
@@ -80,14 +84,49 @@ async def process_followup_queue(user_id: str) -> Dict[str, Any]:
             "message": "No pending follow-ups"
         }
     
+    # Get an authorized account for sending
+    account = await db.telegram_accounts.find_one({
+        "user_id": user_id,
+        "status": "active",
+        "session_string": {"$exists": True, "$ne": None}
+    }, {"_id": 0})
+    
+    if not account:
+        return {
+            "processed": 0,
+            "sent": 0,
+            "failed": 0,
+            "message": "No authorized accounts available. Please authorize an account first."
+        }
+    
     sent = 0
     failed = 0
+    errors = []
     
     for item in pending_items:
-        # Simulate sending voice message (90% success rate)
-        success = random.random() > 0.1
+        # Get voice message file
+        voice = await db.voice_messages.find_one({"id": item.get("voice_message_id")})
+        if not voice:
+            await db.followup_queue.update_one(
+                {"id": item["id"]},
+                {"$set": {"status": "failed", "error": "Voice message not found", "failed_at": now.isoformat()}}
+            )
+            failed += 1
+            continue
         
-        if success:
+        voice_file_path = str(UPLOAD_DIR / voice["filename"])
+        
+        # REAL Telegram voice message sending
+        result = await send_voice_message(
+            account_id=account["id"],
+            phone=account["phone"],
+            session_string=account["session_string"],
+            recipient_phone=item["contact_phone"],
+            voice_file_path=voice_file_path,
+            proxy=account.get("proxy")
+        )
+        
+        if result.get("status") == "sent":
             await db.followup_queue.update_one(
                 {"id": item["id"]},
                 {"$set": {"status": "sent", "sent_at": now.isoformat()}}
@@ -100,11 +139,10 @@ async def process_followup_queue(user_id: str) -> Dict[str, Any]:
             )
             
             # Update voice message counter
-            if item.get("voice_message_id"):
-                await db.voice_messages.update_one(
-                    {"id": item["voice_message_id"]},
-                    {"$inc": {"sent_count": 1}}
-                )
+            await db.voice_messages.update_one(
+                {"id": item["voice_message_id"]},
+                {"$inc": {"sent_count": 1}}
+            )
             
             # Add to dialog
             dialog = await db.dialogs.find_one({"contact_id": item["contact_id"]})
@@ -117,22 +155,31 @@ async def process_followup_queue(user_id: str) -> Dict[str, Any]:
                         "type": "voice",
                         "text": f"🎤 Голосовое сообщение: {item.get('voice_message_name', 'Без названия')}",
                         "status": "delivered",
+                        "telegram_message_id": result.get("message_id"),
                         "sent_at": now.isoformat()
                     }}}
                 )
             
             sent += 1
+            logger.info(f"Voice sent to {item['contact_phone']}")
+            
+            # Delay between sends
+            await asyncio.sleep(30)
         else:
+            error_msg = result.get("message", "Unknown error")
             await db.followup_queue.update_one(
                 {"id": item["id"]},
-                {"$set": {"status": "failed", "failed_at": now.isoformat()}}
+                {"$set": {"status": "failed", "error": error_msg, "failed_at": now.isoformat()}}
             )
+            errors.append({"contact": item["contact_phone"], "error": error_msg})
             failed += 1
+            logger.error(f"Voice failed to {item['contact_phone']}: {error_msg}")
     
     return {
         "processed": len(pending_items),
         "sent": sent,
-        "failed": failed
+        "failed": failed,
+        "errors": errors[:5] if errors else []
     }
 
 
