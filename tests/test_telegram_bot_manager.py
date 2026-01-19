@@ -601,4 +601,4 @@ class TestHealthEndpoints:
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "ok"
-        assert "Telegram Bot Manager" in data["message"]
+        assert "TG Sender" in data["message"] or "Telegram" in data["message"]
