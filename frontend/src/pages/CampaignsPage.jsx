@@ -6,6 +6,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Switch } from '../components/ui/switch';
+import { Checkbox } from '../components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -20,22 +21,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from '../components/ui/select';
-import { Checkbox } from '../components/ui/checkbox';
 import { toast } from 'sonner';
 import { 
   Plus, 
   Send, 
   Play,
-  Pause,
   Trash2,
   CheckCircle,
-  XCircle,
-  Clock,
   MessageSquare,
   Users,
   Phone,
   FileText,
-  Sparkles
+  Sparkles,
+  DollarSign,
+  Wallet
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -64,16 +63,40 @@ const StatusBadge = ({ status }) => {
   );
 };
 
+const CategoryBadge = ({ categories }) => {
+  if (!categories || categories.length === 0) return null;
+  
+  const labels = {
+    low: { text: 'до 300$', color: 'bg-zinc-500/10 text-zinc-400' },
+    medium: { text: '300-500$', color: 'bg-amber-500/10 text-amber-400' },
+    high: { text: '500$+', color: 'bg-emerald-500/10 text-emerald-400' },
+  };
+  
+  return (
+    <div className="flex gap-1">
+      {categories.map(cat => (
+        <span key={cat} className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs ${labels[cat]?.color || ''}`}>
+          <DollarSign className="w-3 h-3" />
+          {labels[cat]?.text || cat}
+        </span>
+      ))}
+    </div>
+  );
+};
+
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState([]);
   const [accounts, setAccounts] = useState([]);
+  const [accountStats, setAccountStats] = useState({ total: 0, low: 0, medium: 0, high: 0 });
   const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectionMode, setSelectionMode] = useState('categories'); // 'categories' or 'individual'
   const [newCampaign, setNewCampaign] = useState({
     name: '',
     message_template: '',
     account_ids: [],
+    account_categories: [],
     tag_filter: '',
     use_rotation: true,
     respect_limits: true
@@ -87,14 +110,16 @@ export default function CampaignsPage() {
 
   const fetchData = async () => {
     try {
-      const [campaignsRes, accountsRes, templatesRes] = await Promise.all([
+      const [campaignsRes, accountsRes, templatesRes, statsRes] = await Promise.all([
         axios.get(`${API}/campaigns`),
         axios.get(`${API}/accounts`),
-        axios.get(`${API}/templates`)
+        axios.get(`${API}/templates`),
+        axios.get(`${API}/accounts/stats`)
       ]);
       setCampaigns(campaignsRes.data);
       setAccounts(accountsRes.data.filter(a => a.status === 'active'));
       setTemplates(templatesRes.data);
+      setAccountStats(statsRes.data);
     } catch (error) {
       toast.error('Ошибка загрузки данных');
     } finally {
@@ -117,7 +142,12 @@ export default function CampaignsPage() {
 
   const handleCreateCampaign = async (e) => {
     e.preventDefault();
-    if (newCampaign.account_ids.length === 0) {
+    
+    if (selectionMode === 'categories' && newCampaign.account_categories.length === 0) {
+      toast.error('Выберите хотя бы одну категорию аккаунтов');
+      return;
+    }
+    if (selectionMode === 'individual' && newCampaign.account_ids.length === 0) {
       toast.error('Выберите хотя бы один аккаунт');
       return;
     }
@@ -127,13 +157,20 @@ export default function CampaignsPage() {
     }
     
     try {
-      await axios.post(`${API}/campaigns`, newCampaign);
+      const payload = {
+        ...newCampaign,
+        account_ids: selectionMode === 'individual' ? newCampaign.account_ids : [],
+        account_categories: selectionMode === 'categories' ? newCampaign.account_categories : []
+      };
+      
+      await axios.post(`${API}/campaigns`, payload);
       toast.success('Рассылка создана');
       setDialogOpen(false);
       setNewCampaign({
         name: '',
         message_template: '',
         account_ids: [],
+        account_categories: [],
         tag_filter: '',
         use_rotation: true,
         respect_limits: true
@@ -149,7 +186,14 @@ export default function CampaignsPage() {
     setStartingCampaign(campaignId);
     try {
       const response = await axios.put(`${API}/campaigns/${campaignId}/start`);
-      toast.success(`Рассылка завершена: ${response.data.delivered} доставлено, ${response.data.responses} ответов`);
+      const { delivered, responses, by_category } = response.data;
+      
+      let categoryInfo = '';
+      if (by_category && Object.keys(by_category).length > 0) {
+        categoryInfo = ` (${Object.entries(by_category).map(([k, v]) => `${k}: ${v}`).join(', ')})`;
+      }
+      
+      toast.success(`Рассылка завершена: ${delivered} доставлено, ${responses} ответов${categoryInfo}`);
       fetchData();
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Ошибка запуска');
@@ -170,6 +214,15 @@ export default function CampaignsPage() {
     }
   };
 
+  const toggleCategory = (category) => {
+    setNewCampaign(prev => ({
+      ...prev,
+      account_categories: prev.account_categories.includes(category)
+        ? prev.account_categories.filter(c => c !== category)
+        : [...prev.account_categories, category]
+    }));
+  };
+
   const toggleAccountSelection = (accountId) => {
     setNewCampaign(prev => ({
       ...prev,
@@ -179,10 +232,10 @@ export default function CampaignsPage() {
     }));
   };
 
-  const selectAllAccounts = () => {
+  const selectAllCategories = () => {
     setNewCampaign(prev => ({
       ...prev,
-      account_ids: accounts.map(a => a.id)
+      account_categories: ['low', 'medium', 'high']
     }));
   };
 
@@ -233,10 +286,7 @@ export default function CampaignsPage() {
                   Выбрать шаблон
                 </Label>
                 <Select value={selectedTemplateId} onValueChange={handleTemplateSelect}>
-                  <SelectTrigger 
-                    data-testid="template-select"
-                    className="bg-zinc-950 border-white/10 text-white"
-                  >
+                  <SelectTrigger className="bg-zinc-950 border-white/10 text-white">
                     <SelectValue placeholder="Выберите шаблон или напишите свой" />
                   </SelectTrigger>
                   <SelectContent className="bg-zinc-900 border-white/10">
@@ -259,63 +309,149 @@ export default function CampaignsPage() {
                   placeholder="{time}, {name}!
 
 {Хочу предложить|Предлагаю} вам..."
-                  className="bg-zinc-950 border-white/10 text-white min-h-[120px] font-mono text-sm"
+                  className="bg-zinc-950 border-white/10 text-white min-h-[100px] font-mono text-sm"
                   required
                 />
-                <p className="text-xs text-zinc-500">
-                  <Sparkles className="w-3 h-3 inline mr-1" />
-                  Используйте {'{name}'}, {'{time}'} и {'{вариант1|вариант2}'} для персонализации
-                </p>
               </div>
               
               <div className="space-y-2">
-                <Label className="text-zinc-300">Фильтр по тегу (опционально)</Label>
+                <Label className="text-zinc-300">Фильтр по тегу контактов</Label>
                 <Input
-                  data-testid="campaign-tag-input"
                   value={newCampaign.tag_filter}
                   onChange={(e) => setNewCampaign({ ...newCampaign, tag_filter: e.target.value })}
-                  placeholder="VIP, Клиент"
+                  placeholder="VIP, Клиент (оставьте пустым для всех)"
                   className="bg-zinc-950 border-white/10 text-white"
                 />
               </div>
               
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label className="text-zinc-300">Аккаунты для рассылки</Label>
+              {/* Account Selection Mode */}
+              <div className="space-y-3 p-4 bg-zinc-950 rounded-lg border border-white/10">
+                <Label className="text-zinc-300 flex items-center gap-2">
+                  <Wallet className="w-4 h-4 text-emerald-400" />
+                  Выбор аккаунтов для рассылки
+                </Label>
+                
+                <div className="flex gap-2">
                   <Button
                     type="button"
-                    variant="ghost"
+                    variant={selectionMode === 'categories' ? 'default' : 'outline'}
                     size="sm"
-                    onClick={selectAllAccounts}
-                    className="text-sky-400 hover:text-sky-300"
+                    onClick={() => setSelectionMode('categories')}
+                    className={selectionMode === 'categories' ? 'bg-sky-500' : 'border-white/10'}
                   >
-                    Выбрать все ({accounts.length})
+                    <DollarSign className="w-4 h-4 mr-1" />
+                    По категориям
+                  </Button>
+                  <Button
+                    type="button"
+                    variant={selectionMode === 'individual' ? 'default' : 'outline'}
+                    size="sm"
+                    onClick={() => setSelectionMode('individual')}
+                    className={selectionMode === 'individual' ? 'bg-sky-500' : 'border-white/10'}
+                  >
+                    <Users className="w-4 h-4 mr-1" />
+                    Выбрать вручную
                   </Button>
                 </div>
-                <div className="max-h-32 overflow-y-auto space-y-2 p-2 bg-zinc-950 rounded-lg border border-white/10">
-                  {accounts.length === 0 ? (
-                    <p className="text-zinc-500 text-sm">Нет активных аккаунтов</p>
-                  ) : (
-                    accounts.map((account) => (
-                      <div key={account.id} className="flex items-center gap-2">
-                        <Checkbox
-                          id={account.id}
-                          checked={newCampaign.account_ids.includes(account.id)}
-                          onCheckedChange={() => toggleAccountSelection(account.id)}
-                        />
-                        <label htmlFor={account.id} className="text-sm text-zinc-300 cursor-pointer flex-1">
-                          {account.name || account.phone}
-                          {account.proxy?.enabled && (
-                            <span className="ml-2 text-xs text-purple-400">(прокси)</span>
-                          )}
-                        </label>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <p className="text-xs text-zinc-500">
-                  Выбрано: {newCampaign.account_ids.length} из {accounts.length}
-                </p>
+                
+                {selectionMode === 'categories' ? (
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-sm text-zinc-500">Выберите ценовые категории</span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={selectAllCategories}
+                        className="text-sky-400 hover:text-sky-300"
+                      >
+                        Выбрать все
+                      </Button>
+                    </div>
+                    
+                    <div className="grid grid-cols-3 gap-2">
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => toggleCategory('low')}
+                        className={`flex flex-col items-center p-3 h-auto ${
+                          newCampaign.account_categories.includes('low')
+                            ? 'bg-zinc-500/20 border-zinc-400'
+                            : 'border-white/10'
+                        }`}
+                      >
+                        <DollarSign className="w-5 h-5 text-zinc-400 mb-1" />
+                        <span className="text-sm">до 300$</span>
+                        <span className="text-xs text-zinc-500">{accountStats.low} акк.</span>
+                      </Button>
+                      
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => toggleCategory('medium')}
+                        className={`flex flex-col items-center p-3 h-auto ${
+                          newCampaign.account_categories.includes('medium')
+                            ? 'bg-amber-500/20 border-amber-400'
+                            : 'border-white/10'
+                        }`}
+                      >
+                        <DollarSign className="w-5 h-5 text-amber-400 mb-1" />
+                        <span className="text-sm">300-500$</span>
+                        <span className="text-xs text-zinc-500">{accountStats.medium} акк.</span>
+                      </Button>
+                      
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => toggleCategory('high')}
+                        className={`flex flex-col items-center p-3 h-auto ${
+                          newCampaign.account_categories.includes('high')
+                            ? 'bg-emerald-500/20 border-emerald-400'
+                            : 'border-white/10'
+                        }`}
+                      >
+                        <DollarSign className="w-5 h-5 text-emerald-400 mb-1" />
+                        <span className="text-sm">500$+</span>
+                        <span className="text-xs text-zinc-500">{accountStats.high} акк.</span>
+                      </Button>
+                    </div>
+                    
+                    <p className="text-xs text-zinc-500">
+                      Выбрано категорий: {newCampaign.account_categories.length}
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="max-h-32 overflow-y-auto space-y-2 p-2 bg-zinc-900 rounded-lg border border-white/5">
+                      {accounts.length === 0 ? (
+                        <p className="text-zinc-500 text-sm">Нет активных аккаунтов</p>
+                      ) : (
+                        accounts.map((account) => (
+                          <div key={account.id} className="flex items-center gap-2">
+                            <Checkbox
+                              id={account.id}
+                              checked={newCampaign.account_ids.includes(account.id)}
+                              onCheckedChange={() => toggleAccountSelection(account.id)}
+                            />
+                            <label htmlFor={account.id} className="text-sm text-zinc-300 cursor-pointer flex-1 flex items-center gap-2">
+                              {account.name || account.phone}
+                              <span className={`text-xs px-1 rounded ${
+                                account.price_category === 'high' ? 'bg-emerald-500/10 text-emerald-400' :
+                                account.price_category === 'medium' ? 'bg-amber-500/10 text-amber-400' :
+                                'bg-zinc-500/10 text-zinc-400'
+                              }`}>
+                                ${account.value_usdt || 0}
+                              </span>
+                            </label>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                    <p className="text-xs text-zinc-500">
+                      Выбрано: {newCampaign.account_ids.length} из {accounts.length}
+                    </p>
+                  </div>
+                )}
               </div>
               
               {/* Options */}
@@ -323,7 +459,7 @@ export default function CampaignsPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <Label className="text-zinc-300">Ротация аккаунтов</Label>
-                    <p className="text-xs text-zinc-500">Равномерное распределение нагрузки</p>
+                    <p className="text-xs text-zinc-500">Равномерное распределение</p>
                   </div>
                   <Switch
                     checked={newCampaign.use_rotation}
@@ -333,7 +469,7 @@ export default function CampaignsPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <Label className="text-zinc-300">Учитывать лимиты</Label>
-                    <p className="text-xs text-zinc-500">Не превышать лимиты аккаунтов</p>
+                    <p className="text-xs text-zinc-500">Не превышать лимиты</p>
                   </div>
                   <Switch
                     checked={newCampaign.respect_limits}
@@ -424,7 +560,7 @@ export default function CampaignsPage() {
             <CardContent className="p-8 text-center">
               <Send className="w-12 h-12 text-zinc-600 mx-auto mb-4" />
               <p className="text-zinc-400">Нет рассылок</p>
-              <p className="text-zinc-500 text-sm">Создайте первую рассылку для начала работы</p>
+              <p className="text-zinc-500 text-sm">Создайте первую рассылку</p>
             </CardContent>
           </Card>
         ) : (
@@ -432,12 +568,11 @@ export default function CampaignsPage() {
             <Card 
               key={campaign.id} 
               className="bg-zinc-900/50 border-white/10 hover:border-white/20 transition-colors"
-              data-testid={`campaign-card-${campaign.id}`}
             >
               <CardContent className="p-6">
                 <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
                   <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
+                    <div className="flex items-center gap-3 mb-2 flex-wrap">
                       <h3 className="font-heading text-lg font-semibold text-white">{campaign.name}</h3>
                       <StatusBadge status={campaign.status} />
                       {campaign.use_rotation && (
@@ -445,6 +580,7 @@ export default function CampaignsPage() {
                           Ротация
                         </span>
                       )}
+                      <CategoryBadge categories={campaign.account_categories} />
                     </div>
                     <p className="text-zinc-400 text-sm line-clamp-2 mb-4 font-mono">{campaign.message_template}</p>
                     <div className="flex flex-wrap gap-4 text-sm">
@@ -469,7 +605,6 @@ export default function CampaignsPage() {
                   <div className="flex gap-2">
                     {campaign.status === 'draft' && (
                       <Button
-                        data-testid={`start-campaign-${campaign.id}`}
                         onClick={() => handleStartCampaign(campaign.id)}
                         disabled={startingCampaign === campaign.id}
                         className="bg-emerald-500 hover:bg-emerald-600 text-white"
@@ -485,7 +620,6 @@ export default function CampaignsPage() {
                       </Button>
                     )}
                     <Button
-                      data-testid={`delete-campaign-${campaign.id}`}
                       onClick={() => handleDeleteCampaign(campaign.id)}
                       variant="outline"
                       className="border-red-500/20 text-red-400 hover:bg-red-500/10"
