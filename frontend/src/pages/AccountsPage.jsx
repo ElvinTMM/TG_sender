@@ -264,6 +264,96 @@ export default function AccountsPage() {
     }
   };
 
+  // Telegram Authorization Functions
+  const handleStartAuth = async (account) => {
+    setAuthAccount(account);
+    setAuthDialogOpen(true);
+    setAuthStep('idle');
+    setAuthCode('');
+    setAuth2FA('');
+    setAuthLoading(true);
+    
+    try {
+      const response = await axios.post(`${API}/telegram/auth/start`, {
+        account_id: account.id
+      });
+      
+      if (response.data.status === 'authorized') {
+        toast.success('Аккаунт уже авторизован!');
+        setAuthDialogOpen(false);
+        fetchAccounts();
+      } else if (response.data.status === 'code_sent') {
+        setAuthStep('code_sent');
+        toast.success('SMS код отправлен');
+      } else if (response.data.status === 'error') {
+        toast.error(response.data.message);
+        setAuthDialogOpen(false);
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Ошибка авторизации');
+      setAuthDialogOpen(false);
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleVerifyCode = async () => {
+    if (!authCode.trim()) {
+      toast.error('Введите код');
+      return;
+    }
+    
+    setAuthLoading(true);
+    try {
+      const response = await axios.post(`${API}/telegram/auth/verify-code`, {
+        account_id: authAccount.id,
+        code: authCode.trim()
+      });
+      
+      if (response.data.status === 'authorized') {
+        toast.success('Аккаунт успешно авторизован!');
+        setAuthDialogOpen(false);
+        fetchAccounts();
+      } else if (response.data.status === '2fa_required') {
+        setAuthStep('2fa_required');
+        toast.info('Требуется двухфакторная аутентификация');
+      } else if (response.data.status === 'error') {
+        toast.error(response.data.message);
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Неверный код');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleVerify2FA = async () => {
+    if (!auth2FA.trim()) {
+      toast.error('Введите пароль 2FA');
+      return;
+    }
+    
+    setAuthLoading(true);
+    try {
+      const response = await axios.post(`${API}/telegram/auth/verify-2fa`, {
+        account_id: authAccount.id,
+        password: auth2FA
+      });
+      
+      if (response.data.status === 'authorized') {
+        toast.success('Аккаунт успешно авторизован!');
+        setAuthDialogOpen(false);
+        fetchAccounts();
+      } else if (response.data.status === 'error') {
+        toast.error(response.data.message);
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Неверный пароль');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
   const activeCount = accounts.filter(a => a.status === 'active').length;
   const withProxyCount = accounts.filter(a => a.proxy?.enabled).length;
 
