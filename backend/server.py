@@ -119,7 +119,8 @@ class ContactResponse(BaseModel):
 class CampaignCreate(BaseModel):
     name: str
     message_template: str
-    account_ids: List[str]
+    account_ids: Optional[List[str]] = []
+    account_categories: Optional[List[str]] = []  # low, medium, high
     contact_ids: Optional[List[str]] = None
     tag_filter: Optional[str] = None
     use_rotation: bool = True
@@ -132,6 +133,7 @@ class CampaignResponse(BaseModel):
     message_template: str
     status: str
     use_rotation: bool
+    account_categories: Optional[List[str]]
     total_contacts: int
     messages_sent: int
     messages_delivered: int
@@ -611,7 +613,8 @@ async def create_campaign(campaign: CampaignCreate, current_user: dict = Depends
         "user_id": current_user["id"],
         "name": campaign.name,
         "message_template": campaign.message_template,
-        "account_ids": campaign.account_ids,
+        "account_ids": campaign.account_ids or [],
+        "account_categories": campaign.account_categories or [],
         "contact_ids": campaign.contact_ids,
         "tag_filter": campaign.tag_filter,
         "use_rotation": campaign.use_rotation,
@@ -650,13 +653,32 @@ async def start_campaign(campaign_id: str, current_user: dict = Depends(get_curr
         contact_query["tags"] = campaign["tag_filter"]
     
     contacts = await db.contacts.find(contact_query, {"_id": 0}).to_list(500)
-    accounts = await db.telegram_accounts.find(
-        {"id": {"$in": campaign["account_ids"]}, "status": "active"},
-        {"_id": 0}
-    ).to_list(100)
+    
+    # Build account query based on categories or specific IDs
+    account_query = {"user_id": current_user["id"], "status": "active"}
+    
+    account_categories = campaign.get("account_categories", [])
+    account_ids = campaign.get("account_ids", [])
+    
+    if account_categories:
+        # Filter by price categories
+        category_conditions = []
+        if "low" in account_categories:
+            category_conditions.append({"$or": [{"value_usdt": {"$lt": 300}}, {"value_usdt": {"$exists": False}}]})
+        if "medium" in account_categories:
+            category_conditions.append({"value_usdt": {"$gte": 300, "$lt": 500}})
+        if "high" in account_categories:
+            category_conditions.append({"value_usdt": {"$gte": 500}})
+        
+        if category_conditions:
+            account_query["$or"] = category_conditions
+    elif account_ids:
+        account_query["id"] = {"$in": account_ids}
+    
+    accounts = await db.telegram_accounts.find(account_query, {"_id": 0}).to_list(100)
     
     if not accounts:
-        raise HTTPException(status_code=400, detail="No active accounts available")
+        raise HTTPException(status_code=400, detail="No active accounts available in selected categories")
     
     messages_sent = 0
     messages_delivered = 0
@@ -701,6 +723,7 @@ async def start_campaign(campaign_id: str, current_user: dict = Depends(get_curr
             "status": "delivered" if delivered else "failed",
             "account_id": account["id"],
             "account_phone": account["phone"],
+            "account_category": account.get("price_category", "low"),
             "sent_at": datetime.now(timezone.utc).isoformat()
         }
         
@@ -797,13 +820,23 @@ async def start_campaign(campaign_id: str, current_user: dict = Depends(get_curr
         }}
     )
     
+    # Get category distribution
+    category_stats = {}
+    for acc_id, count in account_msg_count.items():
+        if count > 0:
+            acc = next((a for a in accounts if a["id"] == acc_id), None)
+            if acc:
+                cat = acc.get("price_category", "low")
+                category_stats[cat] = category_stats.get(cat, 0) + count
+    
     return {
         "message": "Campaign completed",
         "sent": messages_sent,
         "delivered": messages_delivered,
         "failed": messages_failed,
         "responses": responded,
-        "accounts_used": len(set(acc["id"] for acc in accounts if account_msg_count[acc["id"]] > 0))
+        "accounts_used": len([a for a in accounts if account_msg_count[a["id"]] > 0]),
+        "by_category": category_stats
     }
 
 @api_router.delete("/campaigns/{campaign_id}")
