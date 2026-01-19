@@ -82,6 +82,7 @@ class TelegramAccountCreate(BaseModel):
     session_string: Optional[str] = None
     proxy: Optional[ProxyConfig] = None
     limits: Optional[AccountLimits] = None
+    value_usdt: Optional[float] = 0  # Стоимость аккаунта в USDT
 
 class TelegramAccountResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -91,6 +92,8 @@ class TelegramAccountResponse(BaseModel):
     status: str
     proxy: Optional[dict]
     limits: Optional[dict]
+    value_usdt: float
+    price_category: str  # low, medium, high
     messages_sent_today: int
     messages_sent_hour: int
     total_messages_sent: int
@@ -288,9 +291,58 @@ async def get_me(current_user: dict = Depends(get_current_user)):
 # ==================== TELEGRAM ACCOUNTS ROUTES ====================
 
 @api_router.get("/accounts", response_model=List[TelegramAccountResponse])
-async def get_accounts(current_user: dict = Depends(get_current_user)):
-    accounts = await db.telegram_accounts.find({"user_id": current_user["id"]}, {"_id": 0}).to_list(1000)
+async def get_accounts(
+    price_category: Optional[str] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    query = {"user_id": current_user["id"]}
+    
+    if price_category == "low":
+        query["value_usdt"] = {"$lt": 300}
+    elif price_category == "medium":
+        query["value_usdt"] = {"$gte": 300, "$lt": 500}
+    elif price_category == "high":
+        query["value_usdt"] = {"$gte": 500}
+    
+    accounts = await db.telegram_accounts.find(query, {"_id": 0}).to_list(1000)
+    
+    # Add price_category to each account
+    for acc in accounts:
+        value = acc.get("value_usdt", 0)
+        if value < 300:
+            acc["price_category"] = "low"
+        elif value < 500:
+            acc["price_category"] = "medium"
+        else:
+            acc["price_category"] = "high"
+    
     return [TelegramAccountResponse(**acc) for acc in accounts]
+
+@api_router.get("/accounts/stats")
+async def get_accounts_stats(current_user: dict = Depends(get_current_user)):
+    """Get account counts by price category"""
+    user_id = current_user["id"]
+    
+    low_count = await db.telegram_accounts.count_documents({
+        "user_id": user_id,
+        "$or": [{"value_usdt": {"$lt": 300}}, {"value_usdt": {"$exists": False}}]
+    })
+    medium_count = await db.telegram_accounts.count_documents({
+        "user_id": user_id,
+        "value_usdt": {"$gte": 300, "$lt": 500}
+    })
+    high_count = await db.telegram_accounts.count_documents({
+        "user_id": user_id,
+        "value_usdt": {"$gte": 500}
+    })
+    total = await db.telegram_accounts.count_documents({"user_id": user_id})
+    
+    return {
+        "total": total,
+        "low": low_count,
+        "medium": medium_count,
+        "high": high_count
+    }
 
 @api_router.post("/accounts", response_model=TelegramAccountResponse)
 async def create_account(account: TelegramAccountCreate, current_user: dict = Depends(get_current_user)):
@@ -298,6 +350,14 @@ async def create_account(account: TelegramAccountCreate, current_user: dict = De
     
     proxy_data = account.proxy.model_dump() if account.proxy else {"enabled": False, "type": "socks5", "host": "", "port": 0}
     limits_data = account.limits.model_dump() if account.limits else {"max_per_hour": 20, "max_per_day": 100, "delay_min": 30, "delay_max": 90}
+    
+    value_usdt = account.value_usdt or 0
+    if value_usdt < 300:
+        price_category = "low"
+    elif value_usdt < 500:
+        price_category = "medium"
+    else:
+        price_category = "high"
     
     account_doc = {
         "id": account_id,
@@ -309,6 +369,8 @@ async def create_account(account: TelegramAccountCreate, current_user: dict = De
         "session_string": account.session_string,
         "proxy": proxy_data,
         "limits": limits_data,
+        "value_usdt": value_usdt,
+        "price_category": price_category,
         "status": "pending",
         "messages_sent_today": 0,
         "messages_sent_hour": 0,
