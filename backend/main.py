@@ -32,6 +32,7 @@ app.include_router(dialogs.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
 app.include_router(voice.router, prefix="/api")
 app.include_router(followup.router, prefix="/api")
+app.include_router(telegram.router, prefix="/api")
 
 # CORS middleware
 app.add_middleware(
