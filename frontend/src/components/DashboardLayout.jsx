@@ -11,7 +11,8 @@ import {
   X,
   Bot,
   MessageSquare,
-  FileText
+  FileText,
+  Mic
 } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from './ui/button';
@@ -22,6 +23,7 @@ const navItems = [
   { to: '/contacts', icon: Phone, label: 'Контакты' },
   { to: '/templates', icon: FileText, label: 'Шаблоны' },
   { to: '/campaigns', icon: Send, label: 'Рассылки' },
+  { to: '/voice', icon: Mic, label: 'Голосовые' },
   { to: '/dialogs', icon: MessageSquare, label: 'Диалоги' },
   { to: '/analytics', icon: BarChart3, label: 'Аналитика' },
 ];

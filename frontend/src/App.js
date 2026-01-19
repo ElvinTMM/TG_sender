@@ -10,6 +10,7 @@ import CampaignsPage from "./pages/CampaignsPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
 import DialogsPage from "./pages/DialogsPage";
 import TemplatesPage from "./pages/TemplatesPage";
+import VoicePage from "./pages/VoicePage";
 import DashboardLayout from "./components/DashboardLayout";
 import "./App.css";
 
@@ -62,6 +63,7 @@ function AppRoutes() {
         <Route path="/campaigns" element={<CampaignsPage />} />
         <Route path="/dialogs" element={<DialogsPage />} />
         <Route path="/templates" element={<TemplatesPage />} />
+        <Route path="/voice" element={<VoicePage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
       </Route>
     </Routes>
