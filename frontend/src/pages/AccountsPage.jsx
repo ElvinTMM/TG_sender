@@ -132,6 +132,14 @@ export default function AccountsPage() {
   const [newAccount, setNewAccount] = useState(defaultAccount);
   const [activeTab, setActiveTab] = useState('all');
   const fileInputRef = useRef(null);
+  
+  // Telegram auth state
+  const [authDialogOpen, setAuthDialogOpen] = useState(false);
+  const [authAccount, setAuthAccount] = useState(null);
+  const [authStep, setAuthStep] = useState('idle'); // idle, code_sent, 2fa_required, authorizing
+  const [authCode, setAuthCode] = useState('');
+  const [auth2FA, setAuth2FA] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
 
   useEffect(() => {
     fetchAccounts();
