@@ -1,13 +1,18 @@
 """
-Campaign execution service with smart account rotation and limits
+Campaign execution service with real Telegram sending via Telethon
 """
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any
 import uuid
 import random
 import re
+import asyncio
+import logging
 
 from config import db
+from services.telegram_service import send_message, send_voice_message
+
+logger = logging.getLogger(__name__)
 
 
 async def get_available_accounts(user_id: str, account_categories: List[str] = None, account_ids: List[str] = None) -> List[dict]:
@@ -46,15 +51,23 @@ async def reset_account_counters(account: dict, now: datetime):
     
     last_hour_reset = account.get("last_hour_reset")
     if last_hour_reset:
-        last_hour_dt = datetime.fromisoformat(last_hour_reset.replace('Z', '+00:00'))
-        if (now - last_hour_dt) >= timedelta(hours=1):
+        try:
+            last_hour_dt = datetime.fromisoformat(last_hour_reset.replace('Z', '+00:00'))
+            if (now - last_hour_dt) >= timedelta(hours=1):
+                updates["messages_sent_hour"] = 0
+                updates["last_hour_reset"] = now.isoformat()
+        except:
             updates["messages_sent_hour"] = 0
             updates["last_hour_reset"] = now.isoformat()
     
     last_day_reset = account.get("last_day_reset")
     if last_day_reset:
-        last_day_dt = datetime.fromisoformat(last_day_reset.replace('Z', '+00:00'))
-        if (now - last_day_dt) >= timedelta(days=1):
+        try:
+            last_day_dt = datetime.fromisoformat(last_day_reset.replace('Z', '+00:00'))
+            if (now - last_day_dt) >= timedelta(days=1):
+                updates["messages_sent_today"] = 0
+                updates["last_day_reset"] = now.isoformat()
+        except:
             updates["messages_sent_today"] = 0
             updates["last_day_reset"] = now.isoformat()
     
@@ -67,6 +80,10 @@ def select_best_account(accounts: List[dict], account_msg_count: Dict[str, int],
     available = []
     
     for acc in accounts:
+        # Only use authorized accounts with session
+        if not acc.get("session_string"):
+            continue
+            
         limits = acc.get("limits", {})
         max_per_hour = limits.get("max_per_hour", 20)
         max_per_day = limits.get("max_per_day", 100)
@@ -124,7 +141,7 @@ def process_template(template: str, contact: dict) -> str:
 
 
 async def execute_campaign(campaign: dict, user_id: str) -> Dict[str, Any]:
-    """Execute a campaign with smart rotation and limits"""
+    """Execute a campaign with REAL Telegram sending"""
     
     # Get contacts
     contact_query = {"user_id": user_id, "status": "pending"}
@@ -135,15 +152,21 @@ async def execute_campaign(campaign: dict, user_id: str) -> Dict[str, Any]:
     
     contacts = await db.contacts.find(contact_query, {"_id": 0}).to_list(500)
     
-    # Get accounts
+    if not contacts:
+        return {"error": "No contacts found", "sent": 0, "delivered": 0, "failed": 0, "responses": 0, "accounts_used": 0, "by_category": {}}
+    
+    # Get accounts (only active with session)
     accounts = await get_available_accounts(
         user_id,
         campaign.get("account_categories", []),
         campaign.get("account_ids", [])
     )
     
-    if not accounts:
-        return {"error": "No active accounts available in selected categories"}
+    # Filter only authorized accounts
+    authorized_accounts = [acc for acc in accounts if acc.get("session_string")]
+    
+    if not authorized_accounts:
+        return {"error": "No authorized accounts available. Please authorize at least one account in Telegram first."}
     
     messages_sent = 0
     messages_delivered = 0
@@ -151,16 +174,22 @@ async def execute_campaign(campaign: dict, user_id: str) -> Dict[str, Any]:
     use_rotation = campaign.get("use_rotation", True)
     respect_limits = campaign.get("respect_limits", True)
     
-    account_msg_count = {acc["id"]: 0 for acc in accounts}
+    account_msg_count = {acc["id"]: 0 for acc in authorized_accounts}
     skipped_due_to_limits = 0
+    errors = []
     
     for contact in contacts:
         # Select best account
         if use_rotation:
-            account = select_best_account(accounts, account_msg_count, respect_limits)
+            account = select_best_account(authorized_accounts, account_msg_count, respect_limits)
         else:
-            # Simple round-robin without limit check
-            account = accounts[messages_sent % len(accounts)]
+            # Use first available authorized account
+            for acc in authorized_accounts:
+                if acc.get("session_string"):
+                    account = acc
+                    break
+            else:
+                account = None
         
         if not account:
             skipped_due_to_limits += 1
@@ -169,8 +198,25 @@ async def execute_campaign(campaign: dict, user_id: str) -> Dict[str, Any]:
         # Process message template
         message_text = process_template(campaign["message_template"], contact)
         
-        # Simulate message sending (90% delivery rate)
-        delivered = random.random() > 0.1
+        # REAL Telegram sending via Telethon
+        result = await send_message(
+            account_id=account["id"],
+            phone=account["phone"],
+            session_string=account["session_string"],
+            recipient_phone=contact["phone"],
+            message=message_text,
+            proxy=account.get("proxy")
+        )
+        
+        delivered = result.get("status") == "sent"
+        
+        # Apply delay between messages to avoid flood
+        limits = account.get("limits", {})
+        delay_min = limits.get("delay_min", 30)
+        delay_max = limits.get("delay_max", 90)
+        delay = random.randint(delay_min, delay_max)
+        
+        logger.info(f"Message to {contact['phone']}: {result['status']}. Waiting {delay}s...")
         
         # Create dialog entry
         dialog = await db.dialogs.find_one({
@@ -183,6 +229,8 @@ async def execute_campaign(campaign: dict, user_id: str) -> Dict[str, Any]:
             "direction": "outgoing",
             "text": message_text,
             "status": "delivered" if delivered else "failed",
+            "error": result.get("message") if not delivered else None,
+            "telegram_message_id": result.get("message_id"),
             "account_id": account["id"],
             "account_phone": account["phone"],
             "account_category": account.get("price_category", "low"),
@@ -231,61 +279,29 @@ async def execute_campaign(campaign: dict, user_id: str) -> Dict[str, Any]:
             )
         else:
             messages_failed += 1
+            errors.append({"contact": contact["phone"], "error": result.get("message", "Unknown error")})
             await db.telegram_accounts.update_one(
                 {"id": account["id"]},
                 {"$inc": {"total_messages_sent": 1, "messages_sent_today": 1, "messages_sent_hour": 1}}
             )
-    
-    # Simulate responses (5-15%)
-    responded = int(messages_delivered * random.uniform(0.05, 0.15))
-    
-    if responded > 0:
-        dialogs_with_msgs = await db.dialogs.find({"user_id": user_id, "has_response": False}).to_list(responded)
-        for dialog in dialogs_with_msgs[:responded]:
-            response_entry = {
-                "id": str(uuid.uuid4()),
-                "direction": "incoming",
-                "text": random.choice([
-                    "Здравствуйте, интересно",
-                    "Расскажите подробнее",
-                    "Сколько стоит?",
-                    "Перезвоните мне",
-                    "Не интересует"
-                ]),
-                "status": "received",
-                "received_at": datetime.now(timezone.utc).isoformat()
-            }
-            await db.dialogs.update_one(
-                {"id": dialog["id"]},
-                {
-                    "$push": {"messages": response_entry},
-                    "$set": {"has_response": True, "last_message_at": datetime.now(timezone.utc).isoformat()}
-                }
-            )
-            await db.contacts.update_one(
-                {"id": dialog["contact_id"]},
-                {"$set": {"status": "responded"}}
-            )
-    
-    # Simulate some contacts reading but not responding
-    read_count = int(messages_delivered * random.uniform(0.3, 0.5)) - responded
-    if read_count > 0:
-        messaged_contacts = await db.contacts.find({
-            "user_id": user_id,
-            "status": "messaged"
-        }).to_list(read_count)
+            
+            # Check if account got banned
+            if "banned" in result.get("message", "").lower():
+                await db.telegram_accounts.update_one(
+                    {"id": account["id"]},
+                    {"$set": {"status": "banned"}}
+                )
+                # Remove from available accounts
+                authorized_accounts = [a for a in authorized_accounts if a["id"] != account["id"]]
         
-        for contact in messaged_contacts[:read_count]:
-            await db.contacts.update_one(
-                {"id": contact["id"]},
-                {"$set": {"status": "read", "read_at": datetime.now(timezone.utc).isoformat()}}
-            )
+        # Wait between messages
+        await asyncio.sleep(delay)
     
     # Get category distribution
     category_stats = {}
     for acc_id, count in account_msg_count.items():
         if count > 0:
-            acc = next((a for a in accounts if a["id"] == acc_id), None)
+            acc = next((a for a in authorized_accounts if a["id"] == acc_id), None)
             if acc:
                 cat = acc.get("price_category", "low")
                 category_stats[cat] = category_stats.get(cat, 0) + count
@@ -294,8 +310,9 @@ async def execute_campaign(campaign: dict, user_id: str) -> Dict[str, Any]:
         "sent": messages_sent,
         "delivered": messages_delivered,
         "failed": messages_failed,
-        "responses": responded,
+        "responses": 0,  # Will be updated as responses come in
         "skipped_due_to_limits": skipped_due_to_limits,
-        "accounts_used": len([a for a in accounts if account_msg_count[a["id"]] > 0]),
-        "by_category": category_stats
+        "accounts_used": len([a for a in authorized_accounts if account_msg_count.get(a["id"], 0) > 0]),
+        "by_category": category_stats,
+        "errors": errors[:10] if errors else []  # First 10 errors
     }
