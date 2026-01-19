@@ -53,7 +53,10 @@ import {
   Shield,
   Edit,
   DollarSign,
-  Wallet
+  Wallet,
+  Key,
+  Send,
+  Loader2
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
