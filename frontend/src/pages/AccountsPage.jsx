@@ -905,6 +905,116 @@ export default function AccountsPage() {
           </Card>
         </motion.div>
       </Tabs>
+
+      {/* Telegram Auth Dialog */}
+      <Dialog open={authDialogOpen} onOpenChange={(open) => {
+        if (!authLoading) {
+          setAuthDialogOpen(open);
+          if (!open) {
+            setAuthStep('idle');
+            setAuthCode('');
+            setAuth2FA('');
+          }
+        }
+      }}>
+        <DialogContent className="bg-zinc-900 border-white/10 max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-white font-heading flex items-center gap-2">
+              <Key className="w-5 h-5 text-sky-400" />
+              Авторизация в Telegram
+            </DialogTitle>
+          </DialogHeader>
+          
+          <div className="space-y-4 mt-4">
+            {authAccount && (
+              <div className="p-3 bg-zinc-950 rounded-lg border border-white/10">
+                <p className="text-sm text-zinc-400">Аккаунт:</p>
+                <p className="font-mono text-sky-400">{authAccount.phone}</p>
+                {authAccount.name && <p className="text-zinc-300">{authAccount.name}</p>}
+              </div>
+            )}
+            
+            {authStep === 'idle' && authLoading && (
+              <div className="flex items-center justify-center gap-3 py-8">
+                <Loader2 className="w-6 h-6 animate-spin text-sky-400" />
+                <span className="text-zinc-300">Отправка SMS кода...</span>
+              </div>
+            )}
+            
+            {authStep === 'code_sent' && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label className="text-zinc-300">SMS код</Label>
+                  <Input
+                    data-testid="auth-code-input"
+                    value={authCode}
+                    onChange={(e) => setAuthCode(e.target.value)}
+                    placeholder="12345"
+                    className="bg-zinc-950 border-white/10 text-white text-center text-2xl tracking-widest"
+                    maxLength={6}
+                    autoFocus
+                  />
+                  <p className="text-xs text-zinc-500">Введите код из SMS</p>
+                </div>
+                <Button
+                  onClick={handleVerifyCode}
+                  disabled={authLoading}
+                  className="w-full bg-sky-500 hover:bg-sky-600"
+                >
+                  {authLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Проверка...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="w-4 h-4 mr-2" />
+                      Подтвердить код
+                    </>
+                  )}
+                </Button>
+              </div>
+            )}
+            
+            {authStep === '2fa_required' && (
+              <div className="space-y-4">
+                <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                  <p className="text-amber-400 text-sm">Включена двухфакторная аутентификация</p>
+                </div>
+                <div className="space-y-2">
+                  <Label className="text-zinc-300">Пароль 2FA</Label>
+                  <Input
+                    data-testid="auth-2fa-input"
+                    type="password"
+                    value={auth2FA}
+                    onChange={(e) => setAuth2FA(e.target.value)}
+                    placeholder="••••••••"
+                    className="bg-zinc-950 border-white/10 text-white"
+                    autoFocus
+                  />
+                </div>
+                <Button
+                  onClick={handleVerify2FA}
+                  disabled={authLoading}
+                  className="w-full bg-sky-500 hover:bg-sky-600"
+                >
+                  {authLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Проверка...
+                    </>
+                  ) : (
+                    <>
+                      <Key className="w-4 h-4 mr-2" />
+                      Войти
+                    </>
+                  )}
+                </Button>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
