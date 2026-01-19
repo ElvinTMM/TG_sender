@@ -14,7 +14,7 @@ from io import StringIO
 import pandas as pd
 
 class TelegramBotManagerTester:
-    def __init__(self, base_url="https://outreach-analytics-1.preview.emergentagent.com"):
+    def __init__(self, base_url="https://outreach-hub-30.preview.emergentagent.com"):
         self.base_url = base_url
         self.api_url = f"{base_url}/api"
         self.token = None
