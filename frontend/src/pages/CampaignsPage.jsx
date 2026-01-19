@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Card, CardContent } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
+import { Switch } from '../components/ui/switch';
 import {
   Dialog,
   DialogContent,
@@ -32,7 +33,9 @@ import {
   Clock,
   MessageSquare,
   Users,
-  Phone
+  Phone,
+  FileText,
+  Sparkles
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -64,6 +67,7 @@ const StatusBadge = ({ status }) => {
 export default function CampaignsPage() {
   const [campaigns, setCampaigns] = useState([]);
   const [accounts, setAccounts] = useState([]);
+  const [templates, setTemplates] = useState([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [newCampaign, setNewCampaign] = useState({
@@ -71,9 +75,10 @@ export default function CampaignsPage() {
     message_template: '',
     account_ids: [],
     tag_filter: '',
-    delay_min: 30,
-    delay_max: 60
+    use_rotation: true,
+    respect_limits: true
   });
+  const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [startingCampaign, setStartingCampaign] = useState(null);
 
   useEffect(() => {
@@ -82,12 +87,14 @@ export default function CampaignsPage() {
 
   const fetchData = async () => {
     try {
-      const [campaignsRes, accountsRes] = await Promise.all([
+      const [campaignsRes, accountsRes, templatesRes] = await Promise.all([
         axios.get(`${API}/campaigns`),
-        axios.get(`${API}/accounts`)
+        axios.get(`${API}/accounts`),
+        axios.get(`${API}/templates`)
       ]);
       setCampaigns(campaignsRes.data);
       setAccounts(accountsRes.data.filter(a => a.status === 'active'));
+      setTemplates(templatesRes.data);
     } catch (error) {
       toast.error('Ошибка загрузки данных');
     } finally {
@@ -95,10 +102,27 @@ export default function CampaignsPage() {
     }
   };
 
+  const handleTemplateSelect = (templateId) => {
+    setSelectedTemplateId(templateId);
+    if (templateId && templateId !== 'custom') {
+      const template = templates.find(t => t.id === templateId);
+      if (template) {
+        setNewCampaign(prev => ({
+          ...prev,
+          message_template: template.content
+        }));
+      }
+    }
+  };
+
   const handleCreateCampaign = async (e) => {
     e.preventDefault();
     if (newCampaign.account_ids.length === 0) {
       toast.error('Выберите хотя бы один аккаунт');
+      return;
+    }
+    if (!newCampaign.message_template.trim()) {
+      toast.error('Введите текст сообщения');
       return;
     }
     
@@ -111,9 +135,10 @@ export default function CampaignsPage() {
         message_template: '',
         account_ids: [],
         tag_filter: '',
-        delay_min: 30,
-        delay_max: 60
+        use_rotation: true,
+        respect_limits: true
       });
+      setSelectedTemplateId('');
       fetchData();
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Ошибка создания');
@@ -124,22 +149,12 @@ export default function CampaignsPage() {
     setStartingCampaign(campaignId);
     try {
       const response = await axios.put(`${API}/campaigns/${campaignId}/start`);
-      toast.success(`Рассылка завершена: ${response.data.delivered} доставлено`);
+      toast.success(`Рассылка завершена: ${response.data.delivered} доставлено, ${response.data.responses} ответов`);
       fetchData();
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Ошибка запуска');
     } finally {
       setStartingCampaign(null);
-    }
-  };
-
-  const handlePauseCampaign = async (campaignId) => {
-    try {
-      await axios.put(`${API}/campaigns/${campaignId}/pause`);
-      toast.success('Рассылка приостановлена');
-      fetchData();
-    } catch (error) {
-      toast.error(error.response?.data?.detail || 'Ошибка');
     }
   };
 
@@ -164,9 +179,17 @@ export default function CampaignsPage() {
     }));
   };
 
+  const selectAllAccounts = () => {
+    setNewCampaign(prev => ({
+      ...prev,
+      account_ids: accounts.map(a => a.id)
+    }));
+  };
+
   const runningCount = campaigns.filter(c => c.status === 'running').length;
   const completedCount = campaigns.filter(c => c.status === 'completed').length;
   const totalSent = campaigns.reduce((acc, c) => acc + c.messages_sent, 0);
+  const totalResponses = campaigns.reduce((acc, c) => acc + c.responses_count, 0);
 
   return (
     <div data-testid="campaigns-page" className="space-y-6">
@@ -186,7 +209,7 @@ export default function CampaignsPage() {
               Создать рассылку
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-zinc-900 border-white/10 max-w-lg">
+          <DialogContent className="bg-zinc-900 border-white/10 max-w-lg max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="text-white font-heading">Новая рассылка</DialogTitle>
             </DialogHeader>
@@ -203,16 +226,46 @@ export default function CampaignsPage() {
                 />
               </div>
               
+              {/* Template Selection */}
+              <div className="space-y-2">
+                <Label className="text-zinc-300 flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-purple-400" />
+                  Выбрать шаблон
+                </Label>
+                <Select value={selectedTemplateId} onValueChange={handleTemplateSelect}>
+                  <SelectTrigger 
+                    data-testid="template-select"
+                    className="bg-zinc-950 border-white/10 text-white"
+                  >
+                    <SelectValue placeholder="Выберите шаблон или напишите свой" />
+                  </SelectTrigger>
+                  <SelectContent className="bg-zinc-900 border-white/10">
+                    <SelectItem value="custom">✏️ Свой текст</SelectItem>
+                    {templates.map(t => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
               <div className="space-y-2">
                 <Label className="text-zinc-300">Текст сообщения</Label>
                 <Textarea
                   data-testid="campaign-message-input"
                   value={newCampaign.message_template}
                   onChange={(e) => setNewCampaign({ ...newCampaign, message_template: e.target.value })}
-                  placeholder="Привет! У нас отличное предложение..."
-                  className="bg-zinc-950 border-white/10 text-white min-h-[100px]"
+                  placeholder="{time}, {name}!
+
+{Хочу предложить|Предлагаю} вам..."
+                  className="bg-zinc-950 border-white/10 text-white min-h-[120px] font-mono text-sm"
                   required
                 />
+                <p className="text-xs text-zinc-500">
+                  <Sparkles className="w-3 h-3 inline mr-1" />
+                  Используйте {'{name}'}, {'{time}'} и {'{вариант1|вариант2}'} для персонализации
+                </p>
               </div>
               
               <div className="space-y-2">
@@ -227,7 +280,18 @@ export default function CampaignsPage() {
               </div>
               
               <div className="space-y-2">
-                <Label className="text-zinc-300">Выберите аккаунты для рассылки</Label>
+                <div className="flex items-center justify-between">
+                  <Label className="text-zinc-300">Аккаунты для рассылки</Label>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={selectAllAccounts}
+                    className="text-sky-400 hover:text-sky-300"
+                  >
+                    Выбрать все ({accounts.length})
+                  </Button>
+                </div>
                 <div className="max-h-32 overflow-y-auto space-y-2 p-2 bg-zinc-950 rounded-lg border border-white/10">
                   {accounts.length === 0 ? (
                     <p className="text-zinc-500 text-sm">Нет активных аккаунтов</p>
@@ -239,34 +303,41 @@ export default function CampaignsPage() {
                           checked={newCampaign.account_ids.includes(account.id)}
                           onCheckedChange={() => toggleAccountSelection(account.id)}
                         />
-                        <label htmlFor={account.id} className="text-sm text-zinc-300 cursor-pointer">
+                        <label htmlFor={account.id} className="text-sm text-zinc-300 cursor-pointer flex-1">
                           {account.name || account.phone}
+                          {account.proxy?.enabled && (
+                            <span className="ml-2 text-xs text-purple-400">(прокси)</span>
+                          )}
                         </label>
                       </div>
                     ))
                   )}
                 </div>
+                <p className="text-xs text-zinc-500">
+                  Выбрано: {newCampaign.account_ids.length} из {accounts.length}
+                </p>
               </div>
               
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label className="text-zinc-300">Задержка мин (сек)</Label>
-                  <Input
-                    type="number"
-                    data-testid="campaign-delay-min-input"
-                    value={newCampaign.delay_min}
-                    onChange={(e) => setNewCampaign({ ...newCampaign, delay_min: parseInt(e.target.value) })}
-                    className="bg-zinc-950 border-white/10 text-white"
+              {/* Options */}
+              <div className="space-y-3 p-3 bg-zinc-950 rounded-lg border border-white/10">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-zinc-300">Ротация аккаунтов</Label>
+                    <p className="text-xs text-zinc-500">Равномерное распределение нагрузки</p>
+                  </div>
+                  <Switch
+                    checked={newCampaign.use_rotation}
+                    onCheckedChange={(checked) => setNewCampaign({ ...newCampaign, use_rotation: checked })}
                   />
                 </div>
-                <div className="space-y-2">
-                  <Label className="text-zinc-300">Задержка макс (сек)</Label>
-                  <Input
-                    type="number"
-                    data-testid="campaign-delay-max-input"
-                    value={newCampaign.delay_max}
-                    onChange={(e) => setNewCampaign({ ...newCampaign, delay_max: parseInt(e.target.value) })}
-                    className="bg-zinc-950 border-white/10 text-white"
+                <div className="flex items-center justify-between">
+                  <div>
+                    <Label className="text-zinc-300">Учитывать лимиты</Label>
+                    <p className="text-xs text-zinc-500">Не превышать лимиты аккаунтов</p>
+                  </div>
+                  <Switch
+                    checked={newCampaign.respect_limits}
+                    onCheckedChange={(checked) => setNewCampaign({ ...newCampaign, respect_limits: checked })}
                   />
                 </div>
               </div>
@@ -301,19 +372,6 @@ export default function CampaignsPage() {
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
           <Card className="bg-zinc-900/50 border-white/10">
             <CardContent className="p-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-lg bg-sky-500/20 flex items-center justify-center">
-                <Play className="w-5 h-5 text-sky-400" />
-              </div>
-              <div>
-                <p className="text-xs font-mono uppercase text-zinc-500">Активных</p>
-                <p className="text-2xl font-bold text-white font-mono">{runningCount}</p>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-          <Card className="bg-zinc-900/50 border-white/10">
-            <CardContent className="p-4 flex items-center gap-4">
               <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
                 <CheckCircle className="w-5 h-5 text-emerald-400" />
               </div>
@@ -324,7 +382,7 @@ export default function CampaignsPage() {
             </CardContent>
           </Card>
         </motion.div>
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
           <Card className="bg-zinc-900/50 border-white/10">
             <CardContent className="p-4 flex items-center gap-4">
               <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
@@ -333,6 +391,19 @@ export default function CampaignsPage() {
               <div>
                 <p className="text-xs font-mono uppercase text-zinc-500">Отправлено</p>
                 <p className="text-2xl font-bold text-white font-mono">{totalSent}</p>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
+          <Card className="bg-zinc-900/50 border-white/10">
+            <CardContent className="p-4 flex items-center gap-4">
+              <div className="w-10 h-10 rounded-lg bg-amber-500/20 flex items-center justify-center">
+                <Users className="w-5 h-5 text-amber-400" />
+              </div>
+              <div>
+                <p className="text-xs font-mono uppercase text-zinc-500">Ответов</p>
+                <p className="text-2xl font-bold text-white font-mono">{totalResponses}</p>
               </div>
             </CardContent>
           </Card>
@@ -369,8 +440,13 @@ export default function CampaignsPage() {
                     <div className="flex items-center gap-3 mb-2">
                       <h3 className="font-heading text-lg font-semibold text-white">{campaign.name}</h3>
                       <StatusBadge status={campaign.status} />
+                      {campaign.use_rotation && (
+                        <span className="px-2 py-0.5 bg-purple-500/10 text-purple-400 text-xs rounded">
+                          Ротация
+                        </span>
+                      )}
                     </div>
-                    <p className="text-zinc-400 text-sm line-clamp-2 mb-4">{campaign.message_template}</p>
+                    <p className="text-zinc-400 text-sm line-clamp-2 mb-4 font-mono">{campaign.message_template}</p>
                     <div className="flex flex-wrap gap-4 text-sm">
                       <div className="flex items-center gap-2 text-zinc-400">
                         <Phone className="w-4 h-4" />
@@ -384,7 +460,7 @@ export default function CampaignsPage() {
                         <CheckCircle className="w-4 h-4" />
                         <span>{campaign.messages_delivered} доставлено</span>
                       </div>
-                      <div className="flex items-center gap-2 text-purple-400">
+                      <div className="flex items-center gap-2 text-amber-400">
                         <Users className="w-4 h-4" />
                         <span>{campaign.responses_count} ответов</span>
                       </div>
@@ -406,17 +482,6 @@ export default function CampaignsPage() {
                             Запустить
                           </>
                         )}
-                      </Button>
-                    )}
-                    {campaign.status === 'running' && (
-                      <Button
-                        data-testid={`pause-campaign-${campaign.id}`}
-                        onClick={() => handlePauseCampaign(campaign.id)}
-                        variant="outline"
-                        className="border-yellow-500/20 text-yellow-400 hover:bg-yellow-500/10"
-                      >
-                        <Pause className="w-4 h-4 mr-2" />
-                        Пауза
                       </Button>
                     )}
                     <Button
