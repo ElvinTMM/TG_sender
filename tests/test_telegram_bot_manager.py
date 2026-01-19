@@ -602,3 +602,122 @@ class TestHealthEndpoints:
         data = response.json()
         assert data["status"] == "ok"
         assert "TG Sender" in data["message"] or "Telegram" in data["message"]
+
+
+
+class TestFollowUpEndpoints:
+    """Follow-up queue tests"""
+    
+    @pytest.fixture(scope="class")
+    def auth_headers(self):
+        """Get auth headers for authenticated requests"""
+        unique_email = f"test_followup_{uuid.uuid4().hex[:8]}@example.com"
+        response = requests.post(f"{BASE_URL}/api/auth/register", json={
+            "email": unique_email,
+            "password": "Test123!",
+            "name": "FollowUp Test User"
+        })
+        assert response.status_code == 200
+        token = response.json()["access_token"]
+        return {"Authorization": f"Bearer {token}"}
+    
+    def test_get_followup_stats(self, auth_headers):
+        """Test getting follow-up statistics"""
+        response = requests.get(f"{BASE_URL}/api/followup-queue/stats", headers=auth_headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert "pending" in data
+        assert "sent" in data
+        assert "read_not_in_queue" in data
+    
+    def test_get_followup_queue(self, auth_headers):
+        """Test getting follow-up queue"""
+        response = requests.get(f"{BASE_URL}/api/followup-queue", headers=auth_headers)
+        assert response.status_code == 200
+        assert isinstance(response.json(), list)
+    
+    def test_process_empty_queue(self, auth_headers):
+        """Test processing empty follow-up queue"""
+        response = requests.post(f"{BASE_URL}/api/followup-queue/process", headers=auth_headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert "processed" in data
+        assert "sent" in data
+
+
+class TestRotationAndLimits:
+    """Test account rotation and limits during campaign execution"""
+    
+    @pytest.fixture(scope="class")
+    def setup_data(self):
+        """Setup accounts and contacts for testing"""
+        unique_email = f"test_rotation_{uuid.uuid4().hex[:8]}@example.com"
+        response = requests.post(f"{BASE_URL}/api/auth/register", json={
+            "email": unique_email,
+            "password": "Test123!",
+            "name": "Rotation Test User"
+        })
+        assert response.status_code == 200
+        token = response.json()["access_token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        
+        # Create accounts with different price categories and limits
+        accounts = []
+        for i, (value, max_hour) in enumerate([(100, 5), (350, 10), (600, 15)]):
+            acc_response = requests.post(f"{BASE_URL}/api/accounts", headers=headers, json={
+                "phone": f"+7999{i}234567",
+                "name": f"Test Account {i}",
+                "value_usdt": value,
+                "limits": {
+                    "max_per_hour": max_hour,
+                    "max_per_day": 100,
+                    "delay_min": 1,
+                    "delay_max": 2
+                }
+            })
+            assert acc_response.status_code == 200
+            acc = acc_response.json()
+            # Activate account
+            requests.put(f"{BASE_URL}/api/accounts/{acc['id']}/status?status=active", headers=headers)
+            accounts.append(acc)
+        
+        # Create contacts
+        contacts = []
+        for i in range(10):
+            contact_response = requests.post(f"{BASE_URL}/api/contacts", headers=headers, json={
+                "phone": f"+7888{i}234567",
+                "name": f"Contact {i}"
+            })
+            assert contact_response.status_code == 200
+            contacts.append(contact_response.json())
+        
+        return {"headers": headers, "accounts": accounts, "contacts": contacts}
+    
+    def test_campaign_with_rotation(self, setup_data):
+        """Test campaign execution uses account rotation"""
+        headers = setup_data["headers"]
+        
+        # Create campaign with all categories
+        campaign_response = requests.post(f"{BASE_URL}/api/campaigns", headers=headers, json={
+            "name": "Rotation Test Campaign",
+            "message_template": "Test {name}",
+            "account_categories": ["low", "medium", "high"],
+            "use_rotation": True,
+            "respect_limits": True
+        })
+        assert campaign_response.status_code == 200
+        campaign = campaign_response.json()
+        
+        # Start campaign
+        start_response = requests.put(f"{BASE_URL}/api/campaigns/{campaign['id']}/start", headers=headers)
+        assert start_response.status_code == 200
+        result = start_response.json()
+        
+        # Verify distribution across categories
+        assert "by_category" in result
+        assert result["accounts_used"] > 0
+        
+        # With rotation, messages should be distributed across accounts
+        if result["sent"] > 0:
+            # Messages should be spread across available accounts
+            assert result["accounts_used"] >= 1
