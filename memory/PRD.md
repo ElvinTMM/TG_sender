@@ -3,175 +3,160 @@
 ## Оригинальная задача
 Создать веб-панель для управления массовыми рассылками в Telegram с подключением большого количества аккаунтов. Панель должна поддерживать загрузку базы номеров и предоставлять аналитику.
 
-## Основные требования
-1. **Управление аккаунтами**: Подключение 50+ Telegram аккаунтов с прокси
-2. **Категории по стоимости**: Группировка аккаунтов по цене (<300$, 300-500$, 500$+)
-3. **Контакты**: Загрузка и управление базой контактов
-4. **Кампании**: Создание рассылок с выбором категорий аккаунтов
-5. **Шаблоны**: Шаблоны сообщений с переменными и спинтаксом
-6. **Аналитика**: Статистика по отправкам и ответам
-7. **Голосовые**: Отправка голосовых сообщений тем, кто прочитал но не ответил
-8. **Диалоги**: Просмотр переписок с клиентами
-
 ## Технический стек
 - **Backend**: FastAPI + MongoDB + Motor
 - **Frontend**: React + TailwindCSS + Shadcn/UI
 - **Auth**: JWT (python-jose, passlib)
 
-## Что реализовано
+---
 
-### ✅ Завершено (19 января 2026)
+## ✅ Что реализовано (19 января 2026)
 
-**Инфраструктура:**
-- JWT авторизация (регистрация, вход, /api/auth/me)
-- Полная структура API endpoints
-- MongoDB интеграция
+### Рефакторинг backend (v2.0)
+Монолитный `server.py` (~1300 строк) разбит на модули:
+```
+/app/backend/
+├── main.py              # FastAPI app, роутеры
+├── config.py            # Настройки, MongoDB
+├── routers/
+│   ├── auth.py          # Регистрация, вход
+│   ├── accounts.py      # Telegram аккаунты
+│   ├── campaigns.py     # Кампании рассылок
+│   ├── contacts.py      # База контактов
+│   ├── templates.py     # Шаблоны сообщений
+│   ├── analytics.py     # Статистика
+│   ├── dialogs.py       # Переписки
+│   ├── voice.py         # Голосовые сообщения
+│   └── followup.py      # Follow-up очередь
+├── models/
+│   └── schemas.py       # Pydantic модели
+├── services/
+│   ├── auth_service.py      # JWT, хеширование
+│   ├── campaign_service.py  # Логика рассылок с ротацией
+│   └── followup_service.py  # Логика follow-up
+└── server.py            # Обратная совместимость
+```
 
-**Управление аккаунтами:**
-- CRUD операции для Telegram аккаунтов
-- Поле `value_usdt` для стоимости аккаунта
-- Автоматическая категоризация: low (<300$), medium (300-500$), high (500$+)
-- Вкладки на странице аккаунтов по категориям
-- Настройка прокси (SOCKS5/SOCKS4/HTTP)
-- Лимиты отправки (в час/день, задержки)
+### Ротация аккаунтов и лимиты
+- **Умный выбор аккаунта**: выбирается наименее нагруженный
+- **Лимиты**: max сообщений в час/день на аккаунт
+- **Автосброс счётчиков**: hourly и daily reset
+- **Пропуск перегруженных**: если лимит достигнут, переход к другому аккаунту
+- **Распределение по категориям**: отчёт `by_category` в результате кампании
 
-**Кампании:**
-- Создание кампаний с выбором категорий аккаунтов
-- Два режима: "По категориям" или "Выбрать вручную"
-- Кнопка "Выбрать все" для быстрого выбора
-- Привязка к шаблонам сообщений
-- Фильтр по тегам контактов
-- Опции ротации и учёта лимитов
+### Логика "прочитал, но не ответил"
+- **Статус `read`**: контакты отмечаются при симуляции
+- **Очередь follow-up**: добавление read-контактов в очередь
+- **Ручная обработка**: кнопка "Отправить сейчас"
+- **Статистика**: pending, sent, failed, cancelled
+- **API endpoints**:
+  - GET `/api/followup-queue/stats`
+  - POST `/api/followup-queue/add-read-contacts`
+  - POST `/api/followup-queue/process`
 
-**Шаблоны:**
-- CRUD для шаблонов сообщений
-- Переменные: {name}, {time}, {phone}
-- Спинтакс: {вариант1|вариант2}
+### Основной функционал (из предыдущих версий)
+- JWT авторизация
+- Аккаунты с категориями по стоимости (<300$, 300-500$, 500$+)
+- Выбор категорий при создании кампании
+- Шаблоны с переменными и спинтаксом
+- Импорт контактов (CSV, JSON, Excel)
+- Аналитика с графиками
 
-**Контакты:**
-- CRUD операции
-- Импорт из CSV/JSON/Excel
-- Теги для группировки
-- Статусы: pending, messaged, responded, read
-
-**Аналитика:**
-- Общая статистика (аккаунты, контакты, сообщения)
-- Показатели доставляемости и ответов
-- График активности за 7 дней
-- Распределение по категориям аккаунтов
-
-**Голосовые сообщения (UI готов):**
-- Загрузка аудио файлов
-- Настройка задержки отправки
-- Очередь follow-up
-
-**Диалоги (UI готов):**
-- Просмотр переписок
-- Ответы на сообщения
+---
 
 ## ⚠️ ВАЖНО: Симуляция
 **ВСЯ функциональность Telegram СИМУЛИРОВАНА:**
 - Сообщения НЕ отправляются реально
 - Статусы доставки генерируются случайно (90% success)
 - Ответы симулируются (5-15%)
+- "Прочитал" симулируется (30-50%)
 - Требуется интеграция с Telethon
 
+---
+
 ## Тестирование
-- **Backend**: 30/30 тестов пройдено (100%)
-- **Frontend**: UI протестирован
+- **Backend**: 34/34 тестов пройдено (100%)
 - **Файл тестов**: `/app/tests/test_telegram_bot_manager.py`
 
-## API Endpoints
+---
+
+## API Endpoints (v2.0)
 
 ### Auth
-- POST /api/auth/register
-- POST /api/auth/login
-- GET /api/auth/me
+- POST `/api/auth/register`
+- POST `/api/auth/login`
+- GET `/api/auth/me`
 
 ### Accounts
-- GET /api/accounts (с фильтром по price_category)
-- GET /api/accounts/stats
-- POST /api/accounts
-- PUT /api/accounts/{id}
-- DELETE /api/accounts/{id}
+- GET `/api/accounts` (?price_category=low|medium|high)
+- GET `/api/accounts/stats`
+- POST `/api/accounts`
+- PUT `/api/accounts/{id}`
+- PUT `/api/accounts/{id}/status`
+- DELETE `/api/accounts/{id}`
 
 ### Campaigns
-- GET /api/campaigns
-- POST /api/campaigns (с account_categories)
-- PUT /api/campaigns/{id}/start
-- DELETE /api/campaigns/{id}
+- GET `/api/campaigns`
+- POST `/api/campaigns` (account_categories, use_rotation, respect_limits)
+- PUT `/api/campaigns/{id}/start` → returns by_category, skipped_due_to_limits
+- DELETE `/api/campaigns/{id}`
 
-### Templates
-- GET/POST/PUT/DELETE /api/templates
+### Follow-up
+- GET `/api/followup-queue`
+- GET `/api/followup-queue/stats`
+- POST `/api/followup-queue/add-read-contacts`
+- POST `/api/followup-queue/process`
+- DELETE `/api/followup-queue/{id}`
+- DELETE `/api/followup-queue`
 
-### Analytics
-- GET /api/analytics
+### Templates, Contacts, Voice, Dialogs, Analytics
+- См. соответствующие роутеры
 
-### Contacts
-- GET/POST/DELETE /api/contacts
-- POST /api/contacts/import
+---
 
-### Voice Messages
-- GET/POST/DELETE /api/voice-messages
-
-### Dialogs
-- GET /api/dialogs
-- POST /api/dialogs/{id}/reply
-
-## Предстоящие задачи (P0-P2)
+## Предстоящие задачи
 
 ### P0 - Критично
 1. **Интеграция с Telegram (Telethon)**
    - Авторизация аккаунтов (api_id, api_hash, SMS/2FA)
    - Реальная отправка сообщений
-   - Отслеживание статусов (sent, delivered, read)
+   - Получение статусов (sent, delivered, read)
+   - Получение входящих сообщений
 
 ### P1 - Важно
-2. **Голосовые сообщения**
-   - Отправка аудио через Telethon
-   - Логика "прочитал но не ответил"
+2. **Реальная отправка голосовых**
+   - Через Telethon API
 
-3. **Диалоги в реальном времени**
-   - WebSocket для получения входящих
-   - Real-time обновления
+3. **WebSocket для диалогов**
+   - Real-time входящие сообщения
 
 ### P2 - Улучшения
-4. **Ротация и лимиты**
-   - Реальное ограничение отправок
-   - Умная ротация аккаунтов
+4. **A/B тестирование шаблонов**
+5. **Расширенная аналитика по категориям**
 
-5. **Рефакторинг backend**
-   - Разбить server.py на модули
-   - /routers, /models, /services
+---
 
-## Файлы проекта
+## Требования для Telegram интеграции
+1. `api_id` и `api_hash` от https://my.telegram.org
+2. Установка: `pip install telethon`
+3. Обработка авторизации (SMS, 2FA)
+4. Хранение session файлов
 
+---
+
+## Структура файлов
 ```
 /app/
 ├── backend/
-│   ├── server.py          # Все API (монолит)
-│   ├── requirements.txt
-│   ├── .env
-│   └── uploads/voice/     # Голосовые сообщения
+│   ├── main.py, config.py, server.py
+│   ├── routers/ (9 модулей)
+│   ├── models/schemas.py
+│   ├── services/ (3 сервиса)
+│   └── uploads/voice/
 ├── frontend/
-│   └── src/
-│       ├── pages/
-│       │   ├── AccountsPage.jsx
-│       │   ├── CampaignsPage.jsx   # С выбором категорий
-│       │   ├── ContactsPage.jsx
-│       │   ├── TemplatesPage.jsx
-│       │   ├── AnalyticsPage.jsx
-│       │   ├── VoicePage.jsx
-│       │   └── DialogsPage.jsx
-│       └── components/
-│           └── DashboardLayout.jsx
-└── tests/
-    └── test_telegram_bot_manager.py
+│   └── src/pages/ (9 страниц)
+├── tests/
+│   └── test_telegram_bot_manager.py (34 теста)
+└── memory/
+    └── PRD.md
 ```
-
-## Требования для интеграции с Telegram
-Для реальной работы потребуется:
-1. `api_id` и `api_hash` от https://my.telegram.org
-2. Установка Telethon: `pip install telethon`
-3. Обработка авторизации (SMS код, 2FA)
-4. Хранение session файлов
