@@ -8,6 +8,7 @@ import AccountsPage from "./pages/AccountsPage";
 import ContactsPage from "./pages/ContactsPage";
 import CampaignsPage from "./pages/CampaignsPage";
 import AnalyticsPage from "./pages/AnalyticsPage";
+import DialogsPage from "./pages/DialogsPage";
 import DashboardLayout from "./components/DashboardLayout";
 import "./App.css";
 
@@ -58,6 +59,7 @@ function AppRoutes() {
         <Route path="/accounts" element={<AccountsPage />} />
         <Route path="/contacts" element={<ContactsPage />} />
         <Route path="/campaigns" element={<CampaignsPage />} />
+        <Route path="/dialogs" element={<DialogsPage />} />
         <Route path="/analytics" element={<AnalyticsPage />} />
       </Route>
     </Routes>

@@ -9,7 +9,8 @@ import {
   LogOut,
   Menu,
   X,
-  Bot
+  Bot,
+  MessageSquare
 } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from './ui/button';
@@ -19,6 +20,7 @@ const navItems = [
   { to: '/accounts', icon: Users, label: 'Аккаунты' },
   { to: '/contacts', icon: Phone, label: 'Контакты' },
   { to: '/campaigns', icon: Send, label: 'Рассылки' },
+  { to: '/dialogs', icon: MessageSquare, label: 'Диалоги' },
   { to: '/analytics', icon: BarChart3, label: 'Аналитика' },
 ];
 
