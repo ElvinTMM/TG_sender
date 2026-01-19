@@ -852,6 +852,15 @@ export default function AccountsPage() {
                               </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="bg-zinc-900 border-white/10">
+                              {account.status !== 'active' && (
+                                <DropdownMenuItem 
+                                  onClick={() => handleStartAuth(account)}
+                                  className="text-sky-400 focus:text-sky-400"
+                                >
+                                  <Key className="w-4 h-4 mr-2" />
+                                  Авторизовать в Telegram
+                                </DropdownMenuItem>
+                              )}
                               <DropdownMenuItem 
                                 onClick={() => handleEditAccount(account)}
                                 className="text-zinc-300"
