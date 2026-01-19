@@ -65,18 +65,18 @@ class TelegramAccountResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
     phone: str
-    name: Optional[str]
+    name: Optional[str] = None
     status: str
-    proxy: Optional[dict]
-    limits: Optional[dict]
-    value_usdt: float
-    price_category: str
-    messages_sent_today: int
-    messages_sent_hour: int
-    total_messages_sent: int
-    total_messages_delivered: int
+    proxy: Optional[dict] = None
+    limits: Optional[dict] = None
+    value_usdt: float = 0
+    price_category: str = "low"
+    messages_sent_today: int = 0
+    messages_sent_hour: int = 0
+    total_messages_sent: int = 0
+    total_messages_delivered: int = 0
     created_at: str
-    last_active: Optional[str]
+    last_active: Optional[str] = None
 
 
 # ==================== CONTACT MODELS ====================
