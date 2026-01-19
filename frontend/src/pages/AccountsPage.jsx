@@ -51,8 +51,9 @@ import {
   Clock,
   Phone,
   Shield,
-  Settings,
-  Edit
+  Edit,
+  DollarSign,
+  Wallet
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -82,11 +83,27 @@ const StatusBadge = ({ status }) => {
   );
 };
 
+const PriceBadge = ({ category, value }) => {
+  const styles = {
+    low: 'bg-zinc-500/10 text-zinc-400 border-zinc-500/20',
+    medium: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
+    high: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
+  };
+  
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono border ${styles[category] || styles.low}`}>
+      <DollarSign className="w-3 h-3" />
+      {value || 0} USDT
+    </span>
+  );
+};
+
 const defaultAccount = {
   phone: '',
   name: '',
   api_id: '',
   api_hash: '',
+  value_usdt: 0,
   proxy: {
     enabled: false,
     type: 'socks5',
@@ -105,19 +122,26 @@ const defaultAccount = {
 
 export default function AccountsPage() {
   const [accounts, setAccounts] = useState([]);
+  const [stats, setStats] = useState({ total: 0, low: 0, medium: 0, high: 0 });
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingAccount, setEditingAccount] = useState(null);
   const [newAccount, setNewAccount] = useState(defaultAccount);
+  const [activeTab, setActiveTab] = useState('all');
   const fileInputRef = useRef(null);
 
   useEffect(() => {
     fetchAccounts();
-  }, []);
+    fetchStats();
+  }, [activeTab]);
 
   const fetchAccounts = async () => {
     try {
-      const response = await axios.get(`${API}/accounts`);
+      let url = `${API}/accounts`;
+      if (activeTab !== 'all') {
+        url += `?price_category=${activeTab}`;
+      }
+      const response = await axios.get(url);
       setAccounts(response.data);
     } catch (error) {
       toast.error('Ошибка загрузки аккаунтов');
@@ -126,11 +150,21 @@ export default function AccountsPage() {
     }
   };
 
+  const fetchStats = async () => {
+    try {
+      const response = await axios.get(`${API}/accounts/stats`);
+      setStats(response.data);
+    } catch (error) {
+      console.error('Error fetching stats:', error);
+    }
+  };
+
   const handleSaveAccount = async (e) => {
     e.preventDefault();
     try {
       const payload = {
         ...newAccount,
+        value_usdt: parseFloat(newAccount.value_usdt) || 0,
         proxy: {
           ...newAccount.proxy,
           port: parseInt(newAccount.proxy.port) || 0
@@ -155,6 +189,7 @@ export default function AccountsPage() {
       setNewAccount(defaultAccount);
       setEditingAccount(null);
       fetchAccounts();
+      fetchStats();
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Ошибка сохранения');
     }
@@ -167,6 +202,7 @@ export default function AccountsPage() {
       name: account.name || '',
       api_id: '',
       api_hash: '',
+      value_usdt: account.value_usdt || 0,
       proxy: account.proxy || defaultAccount.proxy,
       limits: account.limits || defaultAccount.limits
     });
@@ -186,6 +222,7 @@ export default function AccountsPage() {
       });
       toast.success(`Импортировано ${response.data.imported} аккаунтов`);
       fetchAccounts();
+      fetchStats();
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Ошибка импорта');
     }
@@ -210,13 +247,13 @@ export default function AccountsPage() {
       await axios.delete(`${API}/accounts/${accountId}`);
       toast.success('Аккаунт удален');
       fetchAccounts();
+      fetchStats();
     } catch (error) {
       toast.error('Ошибка удаления');
     }
   };
 
   const activeCount = accounts.filter(a => a.status === 'active').length;
-  const bannedCount = accounts.filter(a => a.status === 'banned').length;
   const withProxyCount = accounts.filter(a => a.proxy?.enabled).length;
 
   return (
@@ -225,7 +262,7 @@ export default function AccountsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="font-heading text-3xl font-bold text-white">Telegram Аккаунты</h1>
-          <p className="text-zinc-400 mt-1">Управление аккаунтами с прокси и лимитами</p>
+          <p className="text-zinc-400 mt-1">Управление аккаунтами по ценовым категориям</p>
         </div>
         <div className="flex gap-2">
           <input
@@ -296,6 +333,62 @@ export default function AccountsPage() {
                         className="bg-zinc-950 border-white/10 text-white"
                       />
                     </div>
+                    
+                    {/* Value USDT */}
+                    <div className="space-y-2">
+                      <Label className="text-zinc-300 flex items-center gap-2">
+                        <Wallet className="w-4 h-4 text-emerald-400" />
+                        Стоимость аккаунта (USDT)
+                      </Label>
+                      <Input
+                        data-testid="account-value-input"
+                        type="number"
+                        step="0.01"
+                        value={newAccount.value_usdt}
+                        onChange={(e) => setNewAccount({ ...newAccount, value_usdt: e.target.value })}
+                        placeholder="0"
+                        className="bg-zinc-950 border-white/10 text-white"
+                      />
+                      <div className="flex gap-2 mt-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setNewAccount({ ...newAccount, value_usdt: 100 })}
+                          className="border-zinc-500/20 text-zinc-400 hover:bg-zinc-500/10"
+                        >
+                          100
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setNewAccount({ ...newAccount, value_usdt: 300 })}
+                          className="border-amber-500/20 text-amber-400 hover:bg-amber-500/10"
+                        >
+                          300
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setNewAccount({ ...newAccount, value_usdt: 500 })}
+                          className="border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/10"
+                        >
+                          500
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setNewAccount({ ...newAccount, value_usdt: 1000 })}
+                          className="border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/10"
+                        >
+                          1000+
+                        </Button>
+                      </div>
+                    </div>
+                    
                     <div className="grid grid-cols-2 gap-4">
                       <div className="space-y-2">
                         <Label className="text-zinc-300">API ID</Label>
@@ -476,9 +569,6 @@ export default function AccountsPage() {
                         />
                       </div>
                     </div>
-                    <p className="text-xs text-zinc-500">
-                      Лимиты помогают избежать блокировки аккаунта
-                    </p>
                   </TabsContent>
                 </Tabs>
                 
@@ -495,180 +585,216 @@ export default function AccountsPage() {
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
-          <Card className="bg-zinc-900/50 border-white/10">
-            <CardContent className="p-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-lg bg-sky-500/20 flex items-center justify-center">
-                <Users className="w-5 h-5 text-sky-400" />
-              </div>
-              <div>
-                <p className="text-xs font-mono uppercase text-zinc-500">Всего</p>
-                <p className="text-2xl font-bold text-white font-mono">{accounts.length}</p>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
-          <Card className="bg-zinc-900/50 border-white/10">
-            <CardContent className="p-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
-                <CheckCircle className="w-5 h-5 text-emerald-400" />
-              </div>
-              <div>
-                <p className="text-xs font-mono uppercase text-zinc-500">Активных</p>
-                <p className="text-2xl font-bold text-white font-mono">{activeCount}</p>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-          <Card className="bg-zinc-900/50 border-white/10">
-            <CardContent className="p-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
-                <Shield className="w-5 h-5 text-purple-400" />
-              </div>
-              <div>
-                <p className="text-xs font-mono uppercase text-zinc-500">С прокси</p>
-                <p className="text-2xl font-bold text-white font-mono">{withProxyCount}</p>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
-          <Card className="bg-zinc-900/50 border-white/10">
-            <CardContent className="p-4 flex items-center gap-4">
-              <div className="w-10 h-10 rounded-lg bg-red-500/20 flex items-center justify-center">
-                <XCircle className="w-5 h-5 text-red-400" />
-              </div>
-              <div>
-                <p className="text-xs font-mono uppercase text-zinc-500">Заблокировано</p>
-                <p className="text-2xl font-bold text-white font-mono">{bannedCount}</p>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-      </div>
+      {/* Price Category Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList className="bg-zinc-800 border border-white/10 p-1">
+          <TabsTrigger 
+            value="all" 
+            className="data-[state=active]:bg-sky-500/20 data-[state=active]:text-sky-400"
+          >
+            <Users className="w-4 h-4 mr-2" />
+            Все ({stats.total})
+          </TabsTrigger>
+          <TabsTrigger 
+            value="low" 
+            className="data-[state=active]:bg-zinc-500/20 data-[state=active]:text-zinc-300"
+          >
+            <DollarSign className="w-4 h-4 mr-1" />
+            до 300$ ({stats.low})
+          </TabsTrigger>
+          <TabsTrigger 
+            value="medium" 
+            className="data-[state=active]:bg-amber-500/20 data-[state=active]:text-amber-400"
+          >
+            <DollarSign className="w-4 h-4 mr-1" />
+            300-500$ ({stats.medium})
+          </TabsTrigger>
+          <TabsTrigger 
+            value="high" 
+            className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400"
+          >
+            <DollarSign className="w-4 h-4 mr-1" />
+            500$+ ({stats.high})
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Table */}
-      <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }}>
-        <Card className="bg-zinc-900/50 border-white/10">
-          <CardContent className="p-0">
-            {loading ? (
-              <div className="p-8 text-center text-zinc-400">Загрузка...</div>
-            ) : accounts.length === 0 ? (
-              <div className="p-8 text-center">
-                <Users className="w-12 h-12 text-zinc-600 mx-auto mb-4" />
-                <p className="text-zinc-400">Нет аккаунтов</p>
-                <p className="text-zinc-500 text-sm">Добавьте аккаунты вручную или импортируйте из файла</p>
-              </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow className="border-white/10 hover:bg-transparent">
-                    <TableHead className="text-zinc-400">Телефон</TableHead>
-                    <TableHead className="text-zinc-400">Название</TableHead>
-                    <TableHead className="text-zinc-400">Прокси</TableHead>
-                    <TableHead className="text-zinc-400">Лимиты</TableHead>
-                    <TableHead className="text-zinc-400">Статус</TableHead>
-                    <TableHead className="text-zinc-400">Отправлено</TableHead>
-                    <TableHead className="text-zinc-400 w-[50px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {accounts.map((account) => (
-                    <TableRow 
-                      key={account.id} 
-                      className="border-white/10 table-row-hover"
-                      data-testid={`account-row-${account.id}`}
-                    >
-                      <TableCell className="font-mono text-sky-400">
-                        <div className="flex items-center gap-2">
-                          <Phone className="w-4 h-4" />
-                          {account.phone}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-zinc-300">{account.name || '-'}</TableCell>
-                      <TableCell>
-                        {account.proxy?.enabled ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-500/10 text-purple-400 rounded text-xs">
-                            <Shield className="w-3 h-3" />
-                            {account.proxy.type.toUpperCase()}
-                          </span>
-                        ) : (
-                          <span className="text-zinc-500 text-sm">Нет</span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-zinc-400 text-sm">
-                        {account.limits?.max_per_hour || 20}/ч, {account.limits?.max_per_day || 100}/д
-                      </TableCell>
-                      <TableCell>
-                        <StatusBadge status={account.status} />
-                      </TableCell>
-                      <TableCell>
-                        <div className="text-sm">
-                          <span className="font-mono text-zinc-300">{account.total_messages_sent || 0}</span>
-                          <span className="text-zinc-500"> / </span>
-                          <span className="font-mono text-emerald-400">{account.total_messages_delivered || 0}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button 
-                              variant="ghost" 
-                              size="icon"
-                              data-testid={`account-menu-${account.id}`}
-                              className="text-zinc-400 hover:text-white"
-                            >
-                              <MoreVertical className="w-4 h-4" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end" className="bg-zinc-900 border-white/10">
-                            <DropdownMenuItem 
-                              onClick={() => handleEditAccount(account)}
-                              className="text-zinc-300"
-                            >
-                              <Edit className="w-4 h-4 mr-2" />
-                              Редактировать
-                            </DropdownMenuItem>
-                            {account.status !== 'active' && (
-                              <DropdownMenuItem 
-                                onClick={() => handleStatusChange(account.id, 'active')}
-                                className="text-emerald-400 focus:text-emerald-400"
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-4 gap-4 mt-4">
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
+            <Card className="bg-zinc-900/50 border-white/10">
+              <CardContent className="p-4 flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-sky-500/20 flex items-center justify-center">
+                  <Users className="w-5 h-5 text-sky-400" />
+                </div>
+                <div>
+                  <p className="text-xs font-mono uppercase text-zinc-500">В категории</p>
+                  <p className="text-2xl font-bold text-white font-mono">{accounts.length}</p>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
+            <Card className="bg-zinc-900/50 border-white/10">
+              <CardContent className="p-4 flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+                  <CheckCircle className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <p className="text-xs font-mono uppercase text-zinc-500">Активных</p>
+                  <p className="text-2xl font-bold text-white font-mono">{activeCount}</p>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
+            <Card className="bg-zinc-900/50 border-white/10">
+              <CardContent className="p-4 flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
+                  <Shield className="w-5 h-5 text-purple-400" />
+                </div>
+                <div>
+                  <p className="text-xs font-mono uppercase text-zinc-500">С прокси</p>
+                  <p className="text-2xl font-bold text-white font-mono">{withProxyCount}</p>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
+            <Card className="bg-zinc-900/50 border-white/10">
+              <CardContent className="p-4 flex items-center gap-4">
+                <div className="w-10 h-10 rounded-lg bg-emerald-500/20 flex items-center justify-center">
+                  <Wallet className="w-5 h-5 text-emerald-400" />
+                </div>
+                <div>
+                  <p className="text-xs font-mono uppercase text-zinc-500">Общая стоимость</p>
+                  <p className="text-2xl font-bold text-white font-mono">
+                    ${accounts.reduce((sum, a) => sum + (a.value_usdt || 0), 0).toFixed(0)}
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+          </motion.div>
+        </div>
+
+        {/* Table */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="mt-4">
+          <Card className="bg-zinc-900/50 border-white/10">
+            <CardContent className="p-0">
+              {loading ? (
+                <div className="p-8 text-center text-zinc-400">Загрузка...</div>
+              ) : accounts.length === 0 ? (
+                <div className="p-8 text-center">
+                  <Users className="w-12 h-12 text-zinc-600 mx-auto mb-4" />
+                  <p className="text-zinc-400">Нет аккаунтов в этой категории</p>
+                  <p className="text-zinc-500 text-sm">Добавьте аккаунты или выберите другую категорию</p>
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow className="border-white/10 hover:bg-transparent">
+                      <TableHead className="text-zinc-400">Телефон</TableHead>
+                      <TableHead className="text-zinc-400">Название</TableHead>
+                      <TableHead className="text-zinc-400">Стоимость</TableHead>
+                      <TableHead className="text-zinc-400">Прокси</TableHead>
+                      <TableHead className="text-zinc-400">Статус</TableHead>
+                      <TableHead className="text-zinc-400">Отправлено</TableHead>
+                      <TableHead className="text-zinc-400 w-[50px]"></TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {accounts.map((account) => (
+                      <TableRow 
+                        key={account.id} 
+                        className="border-white/10 table-row-hover"
+                        data-testid={`account-row-${account.id}`}
+                      >
+                        <TableCell className="font-mono text-sky-400">
+                          <div className="flex items-center gap-2">
+                            <Phone className="w-4 h-4" />
+                            {account.phone}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-zinc-300">{account.name || '-'}</TableCell>
+                        <TableCell>
+                          <PriceBadge category={account.price_category} value={account.value_usdt} />
+                        </TableCell>
+                        <TableCell>
+                          {account.proxy?.enabled ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-purple-500/10 text-purple-400 rounded text-xs">
+                              <Shield className="w-3 h-3" />
+                              {account.proxy.type.toUpperCase()}
+                            </span>
+                          ) : (
+                            <span className="text-zinc-500 text-sm">Нет</span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <StatusBadge status={account.status} />
+                        </TableCell>
+                        <TableCell>
+                          <div className="text-sm">
+                            <span className="font-mono text-zinc-300">{account.total_messages_sent || 0}</span>
+                            <span className="text-zinc-500"> / </span>
+                            <span className="font-mono text-emerald-400">{account.total_messages_delivered || 0}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button 
+                                variant="ghost" 
+                                size="icon"
+                                data-testid={`account-menu-${account.id}`}
+                                className="text-zinc-400 hover:text-white"
                               >
-                                <CheckCircle className="w-4 h-4 mr-2" />
-                                Активировать
-                              </DropdownMenuItem>
-                            )}
-                            {account.status !== 'banned' && (
+                                <MoreVertical className="w-4 h-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end" className="bg-zinc-900 border-white/10">
                               <DropdownMenuItem 
-                                onClick={() => handleStatusChange(account.id, 'banned')}
+                                onClick={() => handleEditAccount(account)}
+                                className="text-zinc-300"
+                              >
+                                <Edit className="w-4 h-4 mr-2" />
+                                Редактировать
+                              </DropdownMenuItem>
+                              {account.status !== 'active' && (
+                                <DropdownMenuItem 
+                                  onClick={() => handleStatusChange(account.id, 'active')}
+                                  className="text-emerald-400 focus:text-emerald-400"
+                                >
+                                  <CheckCircle className="w-4 h-4 mr-2" />
+                                  Активировать
+                                </DropdownMenuItem>
+                              )}
+                              {account.status !== 'banned' && (
+                                <DropdownMenuItem 
+                                  onClick={() => handleStatusChange(account.id, 'banned')}
+                                  className="text-red-400 focus:text-red-400"
+                                >
+                                  <XCircle className="w-4 h-4 mr-2" />
+                                  Заблокировать
+                                </DropdownMenuItem>
+                              )}
+                              <DropdownMenuItem 
+                                onClick={() => handleDelete(account.id)}
                                 className="text-red-400 focus:text-red-400"
                               >
-                                <XCircle className="w-4 h-4 mr-2" />
-                                Заблокировать
+                                <Trash2 className="w-4 h-4 mr-2" />
+                                Удалить
                               </DropdownMenuItem>
-                            )}
-                            <DropdownMenuItem 
-                              onClick={() => handleDelete(account.id)}
-                              className="text-red-400 focus:text-red-400"
-                            >
-                              <Trash2 className="w-4 h-4 mr-2" />
-                              Удалить
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
-      </motion.div>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        </motion.div>
+      </Tabs>
     </div>
   );
 }
