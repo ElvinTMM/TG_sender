@@ -150,6 +150,20 @@ class DialogResponse(BaseModel):
     last_message_at: str
     has_response: bool
 
+class TemplateCreate(BaseModel):
+    name: str
+    content: str
+    description: Optional[str] = None
+
+class TemplateResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str
+    name: str
+    content: str
+    description: Optional[str]
+    created_at: str
+    updated_at: Optional[str]
+
 class AnalyticsResponse(BaseModel):
     total_accounts: int
     active_accounts: int
@@ -810,6 +824,83 @@ async def get_analytics(current_user: dict = Depends(get_current_user)):
         response_rate=round(response_rate, 1),
         daily_stats=daily_stats
     )
+
+# ==================== TEMPLATES ROUTES ====================
+
+@api_router.get("/templates", response_model=List[TemplateResponse])
+async def get_templates(current_user: dict = Depends(get_current_user)):
+    templates = await db.templates.find({"user_id": current_user["id"]}, {"_id": 0}).to_list(100)
+    return [TemplateResponse(**t) for t in templates]
+
+@api_router.post("/templates", response_model=TemplateResponse)
+async def create_template(template: TemplateCreate, current_user: dict = Depends(get_current_user)):
+    template_id = str(uuid.uuid4())
+    template_doc = {
+        "id": template_id,
+        "user_id": current_user["id"],
+        "name": template.name,
+        "content": template.content,
+        "description": template.description,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": None
+    }
+    await db.templates.insert_one(template_doc)
+    return TemplateResponse(**{k: v for k, v in template_doc.items() if k != "user_id"})
+
+@api_router.put("/templates/{template_id}", response_model=TemplateResponse)
+async def update_template(template_id: str, template: TemplateCreate, current_user: dict = Depends(get_current_user)):
+    result = await db.templates.update_one(
+        {"id": template_id, "user_id": current_user["id"]},
+        {"$set": {
+            "name": template.name,
+            "content": template.content,
+            "description": template.description,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Template not found")
+    
+    updated = await db.templates.find_one({"id": template_id}, {"_id": 0})
+    return TemplateResponse(**{k: v for k, v in updated.items() if k != "user_id"})
+
+@api_router.delete("/templates/{template_id}")
+async def delete_template(template_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.templates.delete_one({"id": template_id, "user_id": current_user["id"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return {"message": "Template deleted"}
+
+# Helper function to process template with variables and spintax
+def process_template(template: str, contact: dict) -> str:
+    import re
+    
+    text = template
+    
+    # Replace variables
+    name = contact.get("name") or "друг"
+    text = text.replace("{name}", name)
+    text = text.replace("{first_name}", name.split()[0] if name else "друг")
+    text = text.replace("{phone}", contact.get("phone", ""))
+    
+    # Time of day
+    hour = datetime.now().hour
+    if hour < 12:
+        time_greeting = "Доброе утро"
+    elif hour < 18:
+        time_greeting = "Добрый день"
+    else:
+        time_greeting = "Добрый вечер"
+    text = text.replace("{time}", time_greeting)
+    
+    # Process spintax {option1|option2|option3}
+    def replace_spintax(match):
+        options = match.group(1).split("|")
+        return random.choice(options)
+    
+    text = re.sub(r'\{([^{}]+\|[^{}]+)\}', replace_spintax, text)
+    
+    return text
 
 @api_router.get("/")
 async def root():
