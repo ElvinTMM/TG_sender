@@ -15,28 +15,25 @@ from passlib.context import CryptContext
 import pandas as pd
 from io import BytesIO
 import json
+import random
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# JWT Settings
 SECRET_KEY = os.environ.get('JWT_SECRET', 'your-super-secret-key-change-in-production')
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
 
-# Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 security = HTTPBearer()
 
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
-# Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -63,21 +60,41 @@ class Token(BaseModel):
     token_type: str
     user: UserResponse
 
+class ProxyConfig(BaseModel):
+    enabled: bool = False
+    type: str = "socks5"  # socks5, socks4, http
+    host: str = ""
+    port: int = 0
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+class AccountLimits(BaseModel):
+    max_per_hour: int = 20
+    max_per_day: int = 100
+    delay_min: int = 30
+    delay_max: int = 90
+
 class TelegramAccountCreate(BaseModel):
     phone: str
-    session_string: Optional[str] = None
+    name: Optional[str] = None
     api_id: Optional[str] = None
     api_hash: Optional[str] = None
-    name: Optional[str] = None
+    session_string: Optional[str] = None
+    proxy: Optional[ProxyConfig] = None
+    limits: Optional[AccountLimits] = None
 
 class TelegramAccountResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
     phone: str
     name: Optional[str]
-    status: str  # active, banned, pending
-    messages_sent: int
-    messages_delivered: int
+    status: str
+    proxy: Optional[dict]
+    limits: Optional[dict]
+    messages_sent_today: int
+    messages_sent_hour: int
+    total_messages_sent: int
+    total_messages_delivered: int
     created_at: str
     last_active: Optional[str]
 
@@ -92,7 +109,7 @@ class ContactResponse(BaseModel):
     phone: str
     name: Optional[str]
     tags: List[str]
-    status: str  # pending, messaged, responded, blocked
+    status: str
     created_at: str
     last_contacted: Optional[str]
 
@@ -102,15 +119,16 @@ class CampaignCreate(BaseModel):
     account_ids: List[str]
     contact_ids: Optional[List[str]] = None
     tag_filter: Optional[str] = None
-    delay_min: int = 30
-    delay_max: int = 60
+    use_rotation: bool = True
+    respect_limits: bool = True
 
 class CampaignResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
     name: str
     message_template: str
-    status: str  # draft, running, paused, completed
+    status: str
+    use_rotation: bool
     total_contacts: int
     messages_sent: int
     messages_delivered: int
@@ -120,16 +138,17 @@ class CampaignResponse(BaseModel):
     started_at: Optional[str]
     completed_at: Optional[str]
 
-class MessageResponse(BaseModel):
+class DialogResponse(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str
-    campaign_id: str
-    account_id: str
     contact_id: str
-    status: str  # sent, delivered, failed, responded
-    sent_at: str
-    delivered_at: Optional[str]
-    response_at: Optional[str]
+    contact_phone: str
+    contact_name: Optional[str]
+    account_id: str
+    account_phone: str
+    messages: List[dict]
+    last_message_at: str
+    has_response: bool
 
 class AnalyticsResponse(BaseModel):
     total_accounts: int
@@ -233,28 +252,62 @@ async def get_accounts(current_user: dict = Depends(get_current_user)):
 @api_router.post("/accounts", response_model=TelegramAccountResponse)
 async def create_account(account: TelegramAccountCreate, current_user: dict = Depends(get_current_user)):
     account_id = str(uuid.uuid4())
+    
+    proxy_data = account.proxy.model_dump() if account.proxy else {"enabled": False, "type": "socks5", "host": "", "port": 0}
+    limits_data = account.limits.model_dump() if account.limits else {"max_per_hour": 20, "max_per_day": 100, "delay_min": 30, "delay_max": 90}
+    
     account_doc = {
         "id": account_id,
         "user_id": current_user["id"],
         "phone": account.phone,
         "name": account.name or account.phone,
-        "session_string": account.session_string,
         "api_id": account.api_id,
         "api_hash": account.api_hash,
+        "session_string": account.session_string,
+        "proxy": proxy_data,
+        "limits": limits_data,
         "status": "pending",
-        "messages_sent": 0,
-        "messages_delivered": 0,
+        "messages_sent_today": 0,
+        "messages_sent_hour": 0,
+        "total_messages_sent": 0,
+        "total_messages_delivered": 0,
+        "last_hour_reset": datetime.now(timezone.utc).isoformat(),
+        "last_day_reset": datetime.now(timezone.utc).isoformat(),
         "created_at": datetime.now(timezone.utc).isoformat(),
         "last_active": None
     }
     await db.telegram_accounts.insert_one(account_doc)
-    return TelegramAccountResponse(**{k: v for k, v in account_doc.items() if k != "user_id"})
+    return TelegramAccountResponse(**{k: v for k, v in account_doc.items() if k not in ["user_id", "api_id", "api_hash", "session_string"]})
+
+@api_router.put("/accounts/{account_id}", response_model=TelegramAccountResponse)
+async def update_account(account_id: str, account: TelegramAccountCreate, current_user: dict = Depends(get_current_user)):
+    existing = await db.telegram_accounts.find_one({"id": account_id, "user_id": current_user["id"]})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Account not found")
+    
+    update_data = {
+        "phone": account.phone,
+        "name": account.name or account.phone,
+    }
+    
+    if account.api_id:
+        update_data["api_id"] = account.api_id
+    if account.api_hash:
+        update_data["api_hash"] = account.api_hash
+    if account.session_string:
+        update_data["session_string"] = account.session_string
+    if account.proxy:
+        update_data["proxy"] = account.proxy.model_dump()
+    if account.limits:
+        update_data["limits"] = account.limits.model_dump()
+    
+    await db.telegram_accounts.update_one({"id": account_id}, {"$set": update_data})
+    
+    updated = await db.telegram_accounts.find_one({"id": account_id}, {"_id": 0})
+    return TelegramAccountResponse(**{k: v for k, v in updated.items() if k not in ["user_id", "api_id", "api_hash", "session_string"]})
 
 @api_router.post("/accounts/import")
-async def import_accounts(
-    file: UploadFile = File(...),
-    current_user: dict = Depends(get_current_user)
-):
+async def import_accounts(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
     content = await file.read()
     accounts = []
     
@@ -277,18 +330,40 @@ async def import_accounts(
         existing = await db.telegram_accounts.find_one({"phone": phone, "user_id": current_user["id"]})
         if existing:
             continue
-            
+        
+        proxy_data = {
+            "enabled": bool(acc.get('proxy_host')),
+            "type": acc.get('proxy_type', 'socks5'),
+            "host": acc.get('proxy_host', ''),
+            "port": int(acc.get('proxy_port', 0)) if acc.get('proxy_port') else 0,
+            "username": acc.get('proxy_username'),
+            "password": acc.get('proxy_password')
+        }
+        
+        limits_data = {
+            "max_per_hour": int(acc.get('max_per_hour', 20)),
+            "max_per_day": int(acc.get('max_per_day', 100)),
+            "delay_min": int(acc.get('delay_min', 30)),
+            "delay_max": int(acc.get('delay_max', 90))
+        }
+        
         account_doc = {
             "id": account_id,
             "user_id": current_user["id"],
             "phone": phone,
             "name": acc.get('name', phone),
-            "session_string": acc.get('session_string'),
             "api_id": acc.get('api_id'),
             "api_hash": acc.get('api_hash'),
+            "session_string": acc.get('session_string'),
+            "proxy": proxy_data,
+            "limits": limits_data,
             "status": "active",
-            "messages_sent": 0,
-            "messages_delivered": 0,
+            "messages_sent_today": 0,
+            "messages_sent_hour": 0,
+            "total_messages_sent": 0,
+            "total_messages_delivered": 0,
+            "last_hour_reset": datetime.now(timezone.utc).isoformat(),
+            "last_day_reset": datetime.now(timezone.utc).isoformat(),
             "created_at": datetime.now(timezone.utc).isoformat(),
             "last_active": None
         }
@@ -298,11 +373,7 @@ async def import_accounts(
     return {"message": f"Successfully imported {imported} accounts", "imported": imported}
 
 @api_router.put("/accounts/{account_id}/status")
-async def update_account_status(
-    account_id: str,
-    status: str,
-    current_user: dict = Depends(get_current_user)
-):
+async def update_account_status(account_id: str, status: str, current_user: dict = Depends(get_current_user)):
     if status not in ["active", "banned", "pending"]:
         raise HTTPException(status_code=400, detail="Invalid status")
     
@@ -324,11 +395,7 @@ async def delete_account(account_id: str, current_user: dict = Depends(get_curre
 # ==================== CONTACTS ROUTES ====================
 
 @api_router.get("/contacts", response_model=List[ContactResponse])
-async def get_contacts(
-    tag: Optional[str] = None,
-    status: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
-):
+async def get_contacts(tag: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     query = {"user_id": current_user["id"]}
     if tag:
         query["tags"] = tag
@@ -355,11 +422,7 @@ async def create_contact(contact: ContactCreate, current_user: dict = Depends(ge
     return ContactResponse(**{k: v for k, v in contact_doc.items() if k != "user_id"})
 
 @api_router.post("/contacts/import")
-async def import_contacts(
-    file: UploadFile = File(...),
-    tag: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
-):
+async def import_contacts(file: UploadFile = File(...), tag: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     content = await file.read()
     contacts = []
     
@@ -373,7 +436,7 @@ async def import_contacts(
         df = pd.read_excel(BytesIO(content))
         contacts = df.to_dict('records')
     else:
-        raise HTTPException(status_code=400, detail="Unsupported file format. Use JSON, CSV, or Excel")
+        raise HTTPException(status_code=400, detail="Unsupported file format")
     
     imported = 0
     for c in contacts:
@@ -426,18 +489,10 @@ async def get_campaigns(current_user: dict = Depends(get_current_user)):
     campaigns = await db.campaigns.find({"user_id": current_user["id"]}, {"_id": 0}).to_list(1000)
     return [CampaignResponse(**c) for c in campaigns]
 
-@api_router.get("/campaigns/{campaign_id}", response_model=CampaignResponse)
-async def get_campaign(campaign_id: str, current_user: dict = Depends(get_current_user)):
-    campaign = await db.campaigns.find_one({"id": campaign_id, "user_id": current_user["id"]}, {"_id": 0})
-    if not campaign:
-        raise HTTPException(status_code=404, detail="Campaign not found")
-    return CampaignResponse(**campaign)
-
 @api_router.post("/campaigns", response_model=CampaignResponse)
 async def create_campaign(campaign: CampaignCreate, current_user: dict = Depends(get_current_user)):
     campaign_id = str(uuid.uuid4())
     
-    # Count contacts
     contact_query = {"user_id": current_user["id"]}
     if campaign.contact_ids:
         contact_query["id"] = {"$in": campaign.contact_ids}
@@ -454,8 +509,8 @@ async def create_campaign(campaign: CampaignCreate, current_user: dict = Depends
         "account_ids": campaign.account_ids,
         "contact_ids": campaign.contact_ids,
         "tag_filter": campaign.tag_filter,
-        "delay_min": campaign.delay_min,
-        "delay_max": campaign.delay_max,
+        "use_rotation": campaign.use_rotation,
+        "respect_limits": campaign.respect_limits,
         "status": "draft",
         "total_contacts": total_contacts,
         "messages_sent": 0,
@@ -483,17 +538,13 @@ async def start_campaign(campaign_id: str, current_user: dict = Depends(get_curr
         {"$set": {"status": "running", "started_at": datetime.now(timezone.utc).isoformat()}}
     )
     
-    # Simulate sending messages (in real app, this would be a background task with Telethon)
-    import asyncio
-    import random
-    
-    contact_query = {"user_id": current_user["id"]}
+    contact_query = {"user_id": current_user["id"], "status": "pending"}
     if campaign.get("contact_ids"):
         contact_query["id"] = {"$in": campaign["contact_ids"]}
     elif campaign.get("tag_filter"):
         contact_query["tags"] = campaign["tag_filter"]
     
-    contacts = await db.contacts.find(contact_query, {"_id": 0}).to_list(100)
+    contacts = await db.contacts.find(contact_query, {"_id": 0}).to_list(500)
     accounts = await db.telegram_accounts.find(
         {"id": {"$in": campaign["account_ids"]}, "status": "active"},
         {"_id": 0}
@@ -505,27 +556,76 @@ async def start_campaign(campaign_id: str, current_user: dict = Depends(get_curr
     messages_sent = 0
     messages_delivered = 0
     messages_failed = 0
+    use_rotation = campaign.get("use_rotation", True)
     
-    for i, contact in enumerate(contacts[:50]):  # Limit to 50 for demo
-        account = accounts[i % len(accounts)]
+    account_index = 0
+    account_msg_count = {acc["id"]: 0 for acc in accounts}
+    
+    for contact in contacts:
+        # Rotation logic - pick next available account
+        if use_rotation:
+            # Find account with least messages sent in this batch
+            account = min(accounts, key=lambda a: account_msg_count[a["id"]])
+        else:
+            account = accounts[account_index % len(accounts)]
         
-        # Simulate message sending
-        delivered = random.random() > 0.1  # 90% delivery rate
+        # Check limits
+        acc_limits = account.get("limits", {})
+        max_per_hour = acc_limits.get("max_per_hour", 20)
         
-        message_doc = {
-            "id": str(uuid.uuid4()),
-            "campaign_id": campaign_id,
-            "account_id": account["id"],
+        if account_msg_count[account["id"]] >= max_per_hour:
+            # Skip this account, try next
+            available = [a for a in accounts if account_msg_count[a["id"]] < a.get("limits", {}).get("max_per_hour", 20)]
+            if not available:
+                break  # All accounts exhausted
+            account = available[0]
+        
+        # Simulate message sending (90% delivery rate)
+        delivered = random.random() > 0.1
+        
+        # Create dialog entry
+        dialog = await db.dialogs.find_one({
             "contact_id": contact["id"],
-            "contact_phone": contact["phone"],
+            "user_id": current_user["id"]
+        })
+        
+        message_entry = {
+            "id": str(uuid.uuid4()),
+            "direction": "outgoing",
+            "text": campaign["message_template"],
             "status": "delivered" if delivered else "failed",
-            "sent_at": datetime.now(timezone.utc).isoformat(),
-            "delivered_at": datetime.now(timezone.utc).isoformat() if delivered else None,
-            "response_at": None
+            "account_id": account["id"],
+            "account_phone": account["phone"],
+            "sent_at": datetime.now(timezone.utc).isoformat()
         }
-        await db.messages.insert_one(message_doc)
+        
+        if dialog:
+            await db.dialogs.update_one(
+                {"id": dialog["id"]},
+                {
+                    "$push": {"messages": message_entry},
+                    "$set": {"last_message_at": datetime.now(timezone.utc).isoformat()}
+                }
+            )
+        else:
+            dialog_doc = {
+                "id": str(uuid.uuid4()),
+                "user_id": current_user["id"],
+                "contact_id": contact["id"],
+                "contact_phone": contact["phone"],
+                "contact_name": contact.get("name"),
+                "account_id": account["id"],
+                "account_phone": account["phone"],
+                "messages": [message_entry],
+                "last_message_at": datetime.now(timezone.utc).isoformat(),
+                "has_response": False,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.dialogs.insert_one(dialog_doc)
         
         messages_sent += 1
+        account_msg_count[account["id"]] += 1
+        
         if delivered:
             messages_delivered += 1
             await db.contacts.update_one(
@@ -534,17 +634,51 @@ async def start_campaign(campaign_id: str, current_user: dict = Depends(get_curr
             )
             await db.telegram_accounts.update_one(
                 {"id": account["id"]},
-                {"$inc": {"messages_sent": 1, "messages_delivered": 1}, "$set": {"last_active": datetime.now(timezone.utc).isoformat()}}
+                {
+                    "$inc": {"total_messages_sent": 1, "total_messages_delivered": 1, "messages_sent_today": 1, "messages_sent_hour": 1},
+                    "$set": {"last_active": datetime.now(timezone.utc).isoformat()}
+                }
             )
         else:
             messages_failed += 1
             await db.telegram_accounts.update_one(
                 {"id": account["id"]},
-                {"$inc": {"messages_sent": 1}}
+                {"$inc": {"total_messages_sent": 1, "messages_sent_today": 1, "messages_sent_hour": 1}}
             )
+        
+        account_index += 1
     
-    # Simulate some responses
+    # Simulate responses (5-15%)
     responded = int(messages_delivered * random.uniform(0.05, 0.15))
+    
+    # Add simulated responses to random dialogs
+    if responded > 0:
+        dialogs_with_msgs = await db.dialogs.find({"user_id": current_user["id"], "has_response": False}).to_list(responded)
+        for dialog in dialogs_with_msgs[:responded]:
+            response_entry = {
+                "id": str(uuid.uuid4()),
+                "direction": "incoming",
+                "text": random.choice([
+                    "Здравствуйте, интересно",
+                    "Расскажите подробнее",
+                    "Сколько стоит?",
+                    "Перезвоните мне",
+                    "Не интересует"
+                ]),
+                "status": "received",
+                "received_at": datetime.now(timezone.utc).isoformat()
+            }
+            await db.dialogs.update_one(
+                {"id": dialog["id"]},
+                {
+                    "$push": {"messages": response_entry},
+                    "$set": {"has_response": True, "last_message_at": datetime.now(timezone.utc).isoformat()}
+                }
+            )
+            await db.contacts.update_one(
+                {"id": dialog["contact_id"]},
+                {"$set": {"status": "responded"}}
+            )
     
     await db.campaigns.update_one(
         {"id": campaign_id},
@@ -558,25 +692,63 @@ async def start_campaign(campaign_id: str, current_user: dict = Depends(get_curr
         }}
     )
     
-    return {"message": "Campaign completed", "sent": messages_sent, "delivered": messages_delivered, "failed": messages_failed}
-
-@api_router.put("/campaigns/{campaign_id}/pause")
-async def pause_campaign(campaign_id: str, current_user: dict = Depends(get_current_user)):
-    result = await db.campaigns.update_one(
-        {"id": campaign_id, "user_id": current_user["id"], "status": "running"},
-        {"$set": {"status": "paused"}}
-    )
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Campaign not found or not running")
-    return {"message": "Campaign paused"}
+    return {
+        "message": "Campaign completed",
+        "sent": messages_sent,
+        "delivered": messages_delivered,
+        "failed": messages_failed,
+        "responses": responded,
+        "accounts_used": len(set(acc["id"] for acc in accounts if account_msg_count[acc["id"]] > 0))
+    }
 
 @api_router.delete("/campaigns/{campaign_id}")
 async def delete_campaign(campaign_id: str, current_user: dict = Depends(get_current_user)):
     result = await db.campaigns.delete_one({"id": campaign_id, "user_id": current_user["id"]})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Campaign not found")
-    await db.messages.delete_many({"campaign_id": campaign_id})
     return {"message": "Campaign deleted"}
+
+# ==================== DIALOGS ROUTES ====================
+
+@api_router.get("/dialogs", response_model=List[DialogResponse])
+async def get_dialogs(has_response: Optional[bool] = None, current_user: dict = Depends(get_current_user)):
+    query = {"user_id": current_user["id"]}
+    if has_response is not None:
+        query["has_response"] = has_response
+    
+    dialogs = await db.dialogs.find(query, {"_id": 0}).sort("last_message_at", -1).to_list(500)
+    return [DialogResponse(**d) for d in dialogs]
+
+@api_router.get("/dialogs/{dialog_id}", response_model=DialogResponse)
+async def get_dialog(dialog_id: str, current_user: dict = Depends(get_current_user)):
+    dialog = await db.dialogs.find_one({"id": dialog_id, "user_id": current_user["id"]}, {"_id": 0})
+    if not dialog:
+        raise HTTPException(status_code=404, detail="Dialog not found")
+    return DialogResponse(**dialog)
+
+@api_router.post("/dialogs/{dialog_id}/reply")
+async def reply_to_dialog(dialog_id: str, message: str, current_user: dict = Depends(get_current_user)):
+    dialog = await db.dialogs.find_one({"id": dialog_id, "user_id": current_user["id"]})
+    if not dialog:
+        raise HTTPException(status_code=404, detail="Dialog not found")
+    
+    message_entry = {
+        "id": str(uuid.uuid4()),
+        "direction": "outgoing",
+        "text": message,
+        "status": "delivered",  # Simulated
+        "sent_at": datetime.now(timezone.utc).isoformat()
+    }
+    
+    await db.dialogs.update_one(
+        {"id": dialog_id},
+        {
+            "$push": {"messages": message_entry},
+            "$set": {"last_message_at": datetime.now(timezone.utc).isoformat()}
+        }
+    )
+    
+    return {"message": "Reply sent", "message_id": message_entry["id"]}
 
 # ==================== ANALYTICS ROUTES ====================
 
@@ -584,38 +756,17 @@ async def delete_campaign(campaign_id: str, current_user: dict = Depends(get_cur
 async def get_analytics(current_user: dict = Depends(get_current_user)):
     user_id = current_user["id"]
     
-    # Accounts stats
     total_accounts = await db.telegram_accounts.count_documents({"user_id": user_id})
     active_accounts = await db.telegram_accounts.count_documents({"user_id": user_id, "status": "active"})
     banned_accounts = await db.telegram_accounts.count_documents({"user_id": user_id, "status": "banned"})
     
-    # Contacts stats
     total_contacts = await db.contacts.count_documents({"user_id": user_id})
-    messaged_contacts = await db.contacts.count_documents({"user_id": user_id, "status": "messaged"})
+    messaged_contacts = await db.contacts.count_documents({"user_id": user_id, "status": {"$in": ["messaged", "responded"]}})
     responded_contacts = await db.contacts.count_documents({"user_id": user_id, "status": "responded"})
     
-    # Campaigns stats
     total_campaigns = await db.campaigns.count_documents({"user_id": user_id})
     running_campaigns = await db.campaigns.count_documents({"user_id": user_id, "status": "running"})
     
-    # Messages stats
-    pipeline = [
-        {"$lookup": {"from": "campaigns", "localField": "campaign_id", "foreignField": "id", "as": "campaign"}},
-        {"$match": {"campaign.user_id": user_id}},
-        {"$group": {
-            "_id": None,
-            "total_sent": {"$sum": 1},
-            "total_delivered": {"$sum": {"$cond": [{"$eq": ["$status", "delivered"]}, 1, 0]}},
-            "total_responses": {"$sum": {"$cond": [{"$eq": ["$status", "responded"]}, 1, 0]}}
-        }}
-    ]
-    
-    msg_stats = await db.messages.aggregate(pipeline).to_list(1)
-    total_messages_sent = msg_stats[0]["total_sent"] if msg_stats else 0
-    total_messages_delivered = msg_stats[0]["total_delivered"] if msg_stats else 0
-    total_responses = msg_stats[0]["total_responses"] if msg_stats else 0
-    
-    # Campaign aggregates for responses
     campaign_stats = await db.campaigns.aggregate([
         {"$match": {"user_id": user_id}},
         {"$group": {
@@ -626,15 +777,13 @@ async def get_analytics(current_user: dict = Depends(get_current_user)):
         }}
     ]).to_list(1)
     
-    if campaign_stats:
-        total_messages_sent = campaign_stats[0].get("total_sent", 0)
-        total_messages_delivered = campaign_stats[0].get("total_delivered", 0)
-        total_responses = campaign_stats[0].get("total_responses", 0)
+    total_messages_sent = campaign_stats[0].get("total_sent", 0) if campaign_stats else 0
+    total_messages_delivered = campaign_stats[0].get("total_delivered", 0) if campaign_stats else 0
+    total_responses = campaign_stats[0].get("total_responses", 0) if campaign_stats else 0
     
     delivery_rate = (total_messages_delivered / total_messages_sent * 100) if total_messages_sent > 0 else 0
     response_rate = (total_responses / total_messages_delivered * 100) if total_messages_delivered > 0 else 0
     
-    # Daily stats (last 7 days simulated)
     daily_stats = []
     for i in range(7):
         day = datetime.now(timezone.utc) - timedelta(days=6-i)
@@ -662,23 +811,6 @@ async def get_analytics(current_user: dict = Depends(get_current_user)):
         daily_stats=daily_stats
     )
 
-@api_router.get("/analytics/messages")
-async def get_messages_analytics(
-    campaign_id: Optional[str] = None,
-    current_user: dict = Depends(get_current_user)
-):
-    query = {}
-    if campaign_id:
-        campaign = await db.campaigns.find_one({"id": campaign_id, "user_id": current_user["id"]})
-        if not campaign:
-            raise HTTPException(status_code=404, detail="Campaign not found")
-        query["campaign_id"] = campaign_id
-    
-    messages = await db.messages.find(query, {"_id": 0}).to_list(1000)
-    return messages
-
-# ==================== HEALTH CHECK ====================
-
 @api_router.get("/")
 async def root():
     return {"message": "Telegram Bot Manager API", "status": "ok"}
@@ -687,7 +819,6 @@ async def root():
 async def health_check():
     return {"status": "healthy"}
 
-# Include router and configure app
 app.include_router(api_router)
 
 app.add_middleware(
