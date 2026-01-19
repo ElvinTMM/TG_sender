@@ -9,7 +9,7 @@ import logging
 from config import CORS_ORIGINS, client
 
 # Import routers
-from routers import auth, accounts, contacts, campaigns, templates, dialogs, analytics, voice, followup
+from routers import auth, accounts, contacts, campaigns, templates, dialogs, analytics, voice, followup, telegram
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
