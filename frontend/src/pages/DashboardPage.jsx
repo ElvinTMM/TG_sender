@@ -205,47 +205,48 @@ export default function DashboardPage() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.5 }}
-          className="space-y-4"
+          className="flex flex-col gap-3"
         >
-          <Card className="bg-zinc-900/50 border-white/10">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-lg font-heading text-white flex items-center gap-2">
-                <TrendingUp className="w-5 h-5 text-emerald-400" strokeWidth={1.5} />
+          <Card className="bg-zinc-900/50 border-white/10 flex-1">
+            <CardHeader className="pb-1 pt-3 px-4">
+              <CardTitle className="text-base font-heading text-white flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-emerald-400" strokeWidth={1.5} />
                 Показатели
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg">
-                <div className="flex items-center gap-3">
-                  <CheckCircle className="w-5 h-5 text-emerald-400" strokeWidth={1.5} />
-                  <span className="text-zinc-300">Доставляемость</span>
+            <CardContent className="px-4 pb-3 space-y-2">
+              <div className="flex items-center justify-between p-2 bg-zinc-800/50 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 text-emerald-400" strokeWidth={1.5} />
+                  <span className="text-zinc-300 text-sm">Доставляемость</span>
                 </div>
-                <span className="font-mono text-emerald-400">{analytics?.delivery_rate || 0}%</span>
+                <span className="font-mono text-sm text-emerald-400">{analytics?.delivery_rate || 0}%</span>
               </div>
-              <div className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg">
-                <div className="flex items-center gap-3">
-                  <MessageSquare className="w-5 h-5 text-sky-400" strokeWidth={1.5} />
-                  <span className="text-zinc-300">Ответы</span>
+              <div className="flex items-center justify-between p-2 bg-zinc-800/50 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4 text-sky-400" strokeWidth={1.5} />
+                  <span className="text-zinc-300 text-sm">Ответы</span>
                 </div>
-                <span className="font-mono text-sky-400">{analytics?.response_rate || 0}%</span>
+                <span className="font-mono text-sm text-sky-400">{analytics?.response_rate || 0}%</span>
               </div>
-              <div className="flex items-center justify-between p-3 bg-zinc-800/50 rounded-lg">
-                <div className="flex items-center gap-3">
-                  <XCircle className="w-5 h-5 text-red-400" strokeWidth={1.5} />
-                  <span className="text-zinc-300">Заблокировано</span>
+              <div className="flex items-center justify-between p-2 bg-zinc-800/50 rounded-lg">
+                <div className="flex items-center gap-2">
+                  <XCircle className="w-4 h-4 text-red-400" strokeWidth={1.5} />
+                  <span className="text-zinc-300 text-sm">Заблокировано</span>
                 </div>
-                <span className="font-mono text-red-400">{analytics?.banned_accounts || 0}</span>
+                <span className="font-mono text-sm text-red-400">{analytics?.banned_accounts || 0}</span>
               </div>
             </CardContent>
           </Card>
 
           <Card className="bg-zinc-900/50 border-white/10">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-lg font-heading text-white">Быстрые действия</CardTitle>
+            <CardHeader className="pb-1 pt-3 px-4">
+              <CardTitle className="text-base font-heading text-white">Быстрые действия</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-2">
+            <CardContent className="px-4 pb-3 space-y-1">
               <Button 
                 variant="ghost" 
+                size="sm"
                 className="w-full justify-start text-zinc-400 hover:text-white hover:bg-white/5"
                 onClick={() => navigate('/accounts')}
                 data-testid="quick-accounts-btn"
@@ -255,21 +256,13 @@ export default function DashboardPage() {
               </Button>
               <Button 
                 variant="ghost" 
+                size="sm"
                 className="w-full justify-start text-zinc-400 hover:text-white hover:bg-white/5"
                 onClick={() => navigate('/contacts')}
                 data-testid="quick-contacts-btn"
               >
                 <Phone className="w-4 h-4 mr-2" />
                 Загрузить контакты
-              </Button>
-              <Button 
-                variant="ghost" 
-                className="w-full justify-start text-zinc-400 hover:text-white hover:bg-white/5"
-                onClick={() => navigate('/analytics')}
-                data-testid="quick-analytics-btn"
-              >
-                <TrendingUp className="w-4 h-4 mr-2" />
-                Аналитика
               </Button>
             </CardContent>
           </Card>
