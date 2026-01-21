@@ -126,8 +126,8 @@ export default function DashboardLayout() {
       )}
 
       {/* Main content */}
-      <main className="lg:pl-64 min-h-screen">
-        <div className="p-6 md:p-8">
+      <main className="lg:pl-64 h-screen overflow-hidden">
+        <div className="p-6 md:p-8 h-full overflow-y-auto">
           <Outlet />
         </div>
       </main>
