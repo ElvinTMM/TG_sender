@@ -105,12 +105,12 @@ export default function DashboardPage() {
   ] : [];
 
   return (
-    <div data-testid="dashboard-page" className="space-y-8">
+    <div data-testid="dashboard-page" className="h-[calc(100vh-6rem)] flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between mb-4">
         <div>
-          <h1 className="font-heading text-3xl font-bold text-white">Дашборд</h1>
-          <p className="text-zinc-400 mt-1">Обзор вашей рассылочной активности</p>
+          <h1 className="font-heading text-2xl font-bold text-white">Дашборд</h1>
+          <p className="text-zinc-400 text-sm">Обзор вашей рассылочной активности</p>
         </div>
         <Button 
           data-testid="new-campaign-btn"
@@ -123,14 +123,14 @@ export default function DashboardPage() {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
         {stats.map((stat, i) => (
           <StatCard key={stat.label} {...stat} delay={i} />
         ))}
       </div>
 
       {/* Charts and Info */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 flex-1 min-h-0">
         {/* Main Chart */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
