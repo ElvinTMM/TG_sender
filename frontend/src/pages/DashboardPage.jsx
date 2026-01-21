@@ -27,17 +27,17 @@ const StatCard = ({ icon: Icon, label, value, subValue, color, delay }) => (
     transition={{ delay: delay * 0.1 }}
   >
     <Card className="bg-zinc-900/50 border-white/10 hover:border-white/20 transition-colors">
-      <CardContent className="p-6">
+      <CardContent className="p-4">
         <div className="flex items-start justify-between">
           <div>
-            <p className="text-xs font-mono uppercase tracking-wider text-zinc-500 mb-2">{label}</p>
-            <p className="text-3xl font-bold text-white font-mono">{value}</p>
+            <p className="text-xs font-mono uppercase tracking-wider text-zinc-500 mb-1">{label}</p>
+            <p className="text-2xl font-bold text-white font-mono">{value}</p>
             {subValue && (
-              <p className="text-sm text-zinc-400 mt-1">{subValue}</p>
+              <p className="text-xs text-zinc-400 mt-0.5">{subValue}</p>
             )}
           </div>
-          <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${color}`}>
-            <Icon className="w-6 h-6" strokeWidth={1.5} />
+          <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${color}`}>
+            <Icon className="w-5 h-5" strokeWidth={1.5} />
           </div>
         </div>
       </CardContent>
