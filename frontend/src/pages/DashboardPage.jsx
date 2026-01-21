@@ -136,17 +136,17 @@ export default function DashboardPage() {
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: 0.4 }}
-          className="lg:col-span-2"
+          className="lg:col-span-2 flex flex-col"
         >
-          <Card className="bg-zinc-900/50 border-white/10">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-lg font-heading text-white flex items-center gap-2">
-                <Activity className="w-5 h-5 text-sky-400" strokeWidth={1.5} />
+          <Card className="bg-zinc-900/50 border-white/10 flex-1 flex flex-col">
+            <CardHeader className="pb-1 pt-3 px-4">
+              <CardTitle className="text-base font-heading text-white flex items-center gap-2">
+                <Activity className="w-4 h-4 text-sky-400" strokeWidth={1.5} />
                 Активность за 7 дней
               </CardTitle>
             </CardHeader>
-            <CardContent className="pt-4">
-              <div className="h-64">
+            <CardContent className="pt-2 px-4 pb-3 flex-1">
+              <div className="h-full min-h-[180px]">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={analytics?.daily_stats || []}>
                     <defs>
