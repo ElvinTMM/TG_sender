@@ -35,7 +35,6 @@ const VARIABLES = [
   { key: '{time}', label: 'Время суток', example: 'Добрый день' },
 ];
 
-// Parse spintax: {вариант1|вариант2|вариант3}
 const parseSpintax = (text) => {
   const regex = /\{([^{}]+)\}/g;
   return text.replace(regex, (match, group) => {
@@ -43,28 +42,23 @@ const parseSpintax = (text) => {
       const options = group.split('|');
       return options[Math.floor(Math.random() * options.length)];
     }
-    return match; // Return as is if it's a variable like {name}
+    return match;
   });
 };
 
 const previewMessage = (template, variables = {}) => {
   let text = template;
-  
-  // Replace variables
   text = text.replace(/{name}/g, variables.name || 'Иван');
   text = text.replace(/{first_name}/g, variables.first_name || 'Иван');
   text = text.replace(/{phone}/g, variables.phone || '+79991234567');
   
-  // Time of day
   const hour = new Date().getHours();
   let timeGreeting = 'Добрый день';
   if (hour < 12) timeGreeting = 'Доброе утро';
   else if (hour >= 18) timeGreeting = 'Добрый вечер';
   text = text.replace(/{time}/g, timeGreeting);
   
-  // Parse spintax
   text = parseSpintax(text);
-  
   return text;
 };
 
@@ -157,7 +151,6 @@ export default function TemplatesPage() {
 
   return (
     <div data-testid="templates-page" className="space-y-6">
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="font-heading text-3xl font-bold text-white">Шаблоны сообщений</h1>
@@ -179,110 +172,102 @@ export default function TemplatesPage() {
               Создать шаблон
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-zinc-900 border-white/10 max-w-2xl max-h-[90vh] overflow-y-auto">
-            <DialogHeader>
+          <DialogContent className="bg-zinc-900 border-white/10 max-w-2xl max-h-[85vh] flex flex-col p-0">
+            <DialogHeader className="p-6 pb-0">
               <DialogTitle className="text-white font-heading">
                 {editingTemplate ? 'Редактировать шаблон' : 'Новый шаблон'}
               </DialogTitle>
             </DialogHeader>
-            <form onSubmit={handleSaveTemplate} className="space-y-4 mt-4">
-              <div className="space-y-2">
-                <Label className="text-zinc-300">Название шаблона</Label>
-                <Input
-                  data-testid="template-name-input"
-                  value={newTemplate.name}
-                  onChange={(e) => setNewTemplate({ ...newTemplate, name: e.target.value })}
-                  placeholder="Холодное предложение v1"
-                  className="bg-zinc-950 border-white/10 text-white"
-                  required
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <Label className="text-zinc-300">Описание (опционально)</Label>
-                <Input
-                  data-testid="template-description-input"
-                  value={newTemplate.description}
-                  onChange={(e) => setNewTemplate({ ...newTemplate, description: e.target.value })}
-                  placeholder="Для B2B клиентов"
-                  className="bg-zinc-950 border-white/10 text-white"
-                />
-              </div>
-              
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label className="text-zinc-300">Текст сообщения</Label>
-                  <div className="flex gap-1">
-                    {VARIABLES.map((v) => (
-                      <Button
-                        key={v.key}
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => insertVariable(v.key)}
-                        className="text-xs text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-2"
-                      >
-                        {v.key}
-                      </Button>
-                    ))}
+            <div className="flex-1 overflow-y-auto px-6 pb-6">
+              <form onSubmit={handleSaveTemplate} className="space-y-4 mt-4">
+                <div className="space-y-2">
+                  <Label className="text-zinc-300">Название шаблона</Label>
+                  <Input
+                    data-testid="template-name-input"
+                    value={newTemplate.name}
+                    onChange={(e) => setNewTemplate({ ...newTemplate, name: e.target.value })}
+                    placeholder="Холодное предложение v1"
+                    className="bg-zinc-950 border-white/10 text-white"
+                    required
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <Label className="text-zinc-300">Описание (опционально)</Label>
+                  <Input
+                    data-testid="template-description-input"
+                    value={newTemplate.description}
+                    onChange={(e) => setNewTemplate({ ...newTemplate, description: e.target.value })}
+                    placeholder="Для B2B клиентов"
+                    className="bg-zinc-950 border-white/10 text-white"
+                  />
+                </div>
+                
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-zinc-300">Текст сообщения</Label>
+                    <div className="flex gap-1 flex-wrap">
+                      {VARIABLES.map((v) => (
+                        <Button
+                          key={v.key}
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => insertVariable(v.key)}
+                          className="text-xs text-sky-400 hover:text-sky-300 hover:bg-sky-500/10 px-2"
+                        >
+                          {v.key}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                  <Textarea
+                    data-testid="template-content-input"
+                    value={newTemplate.content}
+                    onChange={(e) => setNewTemplate({ ...newTemplate, content: e.target.value })}
+                    placeholder="Добрый вечер, Иван!"
+                    className="bg-zinc-950 border-white/10 text-white min-h-[120px] font-mono text-sm"
+                    required
+                  />
+                </div>
+                
+                <div className="p-3 bg-zinc-950 rounded-lg border border-white/10 space-y-2">
+                  <div className="flex items-center gap-2 text-sky-400">
+                    <Sparkles className="w-4 h-4" />
+                    <span className="text-sm font-medium">Подсказки</span>
+                  </div>
+                  <div className="space-y-1 text-xs text-zinc-400">
+                    <p><span className="text-purple-400 font-mono">{'{name}'}</span> — имя контакта</p>
+                    <p><span className="text-purple-400 font-mono">{'{time}'}</span> — утро/день/вечер</p>
+                    <p><span className="text-purple-400 font-mono">{'{A|B|C}'}</span> — случайный выбор</p>
                   </div>
                 </div>
-                <Textarea
-                  data-testid="template-content-input"
-                  value={newTemplate.content}
-                  onChange={(e) => setNewTemplate({ ...newTemplate, content: e.target.value })}
-                  placeholder="{time}, {name}! 
-
-{Хочу предложить|Предлагаю|Есть предложение} для вас...
-
-{Интересно|Актуально|Хотите узнать подробнее}?"
-                  className="bg-zinc-950 border-white/10 text-white min-h-[200px] font-mono text-sm"
-                  required
-                />
-              </div>
-              
-              {/* Help Section */}
-              <div className="p-4 bg-zinc-950 rounded-lg border border-white/10 space-y-3">
-                <div className="flex items-center gap-2 text-sky-400">
-                  <Sparkles className="w-4 h-4" />
-                  <span className="text-sm font-medium">Подсказки</span>
-                </div>
-                <div className="space-y-2 text-sm text-zinc-400">
-                  <p><span className="text-purple-400 font-mono">{'{name}'}</span> — имя контакта из базы</p>
-                  <p><span className="text-purple-400 font-mono">{'{time}'}</span> — "Доброе утро/день/вечер"</p>
-                  <p><span className="text-purple-400 font-mono">{'{вариант1|вариант2}'}</span> — случайный выбор (антиспам)</p>
-                </div>
-                <p className="text-xs text-zinc-500">
-                  Пример спинтакса: <span className="font-mono text-zinc-400">{'{Привет|Здравствуйте|Добрый день}'}</span> — каждый раз отправляется разный вариант
-                </p>
-              </div>
-              
-              {/* Preview */}
-              {newTemplate.content && (
-                <div className="p-4 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
-                  <div className="flex items-center gap-2 text-emerald-400 mb-2">
-                    <Eye className="w-4 h-4" />
-                    <span className="text-sm font-medium">Предпросмотр</span>
+                
+                {newTemplate.content && (
+                  <div className="p-3 bg-emerald-500/10 rounded-lg border border-emerald-500/20">
+                    <div className="flex items-center gap-2 text-emerald-400 mb-2">
+                      <Eye className="w-4 h-4" />
+                      <span className="text-sm font-medium">Предпросмотр</span>
+                    </div>
+                    <p className="text-white text-sm whitespace-pre-wrap">
+                      {previewMessage(newTemplate.content)}
+                    </p>
                   </div>
-                  <p className="text-white text-sm whitespace-pre-wrap">
-                    {previewMessage(newTemplate.content)}
-                  </p>
-                </div>
-              )}
-              
-              <Button 
-                type="submit" 
-                data-testid="save-template-btn"
-                className="w-full bg-sky-500 hover:bg-sky-600"
-              >
-                {editingTemplate ? 'Сохранить изменения' : 'Создать шаблон'}
-              </Button>
-            </form>
+                )}
+                
+                <Button 
+                  type="submit" 
+                  data-testid="save-template-btn"
+                  className="w-full bg-sky-500 hover:bg-sky-600"
+                >
+                  {editingTemplate ? 'Сохранить изменения' : 'Создать шаблон'}
+                </Button>
+              </form>
+            </div>
           </DialogContent>
         </Dialog>
       </div>
 
-      {/* Stats */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
           <Card className="bg-zinc-900/50 border-white/10">
@@ -325,7 +310,6 @@ export default function TemplatesPage() {
         </motion.div>
       </div>
 
-      {/* Templates Grid */}
       <motion.div 
         initial={{ opacity: 0, y: 20 }} 
         animate={{ opacity: 1, y: 0 }} 
@@ -411,7 +395,6 @@ export default function TemplatesPage() {
         )}
       </motion.div>
 
-      {/* Preview Dialog */}
       <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
         <DialogContent className="bg-zinc-900 border-white/10">
           <DialogHeader>
