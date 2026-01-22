@@ -56,7 +56,8 @@ import {
   Wallet,
   Key,
   Send,
-  Loader2
+  Loader2,
+  Fingerprint
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -101,11 +102,9 @@ const PriceBadge = ({ category, value }) => {
   );
 };
 
-const defaultAccount = {
+const defaultNewAccount = {
   phone: '',
   name: '',
-  api_id: '',
-  api_hash: '',
   value_usdt: 0,
   proxy: {
     enabled: false,
@@ -127,19 +126,31 @@ export default function AccountsPage() {
   const [accounts, setAccounts] = useState([]);
   const [stats, setStats] = useState({ total: 0, low: 0, medium: 0, high: 0 });
   const [loading, setLoading] = useState(true);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingAccount, setEditingAccount] = useState(null);
-  const [newAccount, setNewAccount] = useState(defaultAccount);
   const [activeTab, setActiveTab] = useState('all');
   const fileInputRef = useRef(null);
   
-  // Telegram auth state
-  const [authDialogOpen, setAuthDialogOpen] = useState(false);
-  const [authAccount, setAuthAccount] = useState(null);
-  const [authStep, setAuthStep] = useState('idle'); // idle, code_sent, 2fa_required, authorizing
+  // Add account dialog state
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [newAccount, setNewAccount] = useState(defaultNewAccount);
+  
+  // Edit account dialog state
+  const [editDialogOpen, setEditDialogOpen] = useState(false);
+  const [editingAccount, setEditingAccount] = useState(null);
+  
+  // Auth state for NEW account
+  const [authStep, setAuthStep] = useState('form'); // form, sending, code_sent, 2fa_required
+  const [tempId, setTempId] = useState(null);
   const [authCode, setAuthCode] = useState('');
   const [auth2FA, setAuth2FA] = useState('');
   const [authLoading, setAuthLoading] = useState(false);
+  
+  // Re-auth state for EXISTING account
+  const [reAuthDialogOpen, setReAuthDialogOpen] = useState(false);
+  const [reAuthAccount, setReAuthAccount] = useState(null);
+  const [reAuthStep, setReAuthStep] = useState('idle');
+  const [reAuthCode, setReAuthCode] = useState('');
+  const [reAuth2FA, setReAuth2FA] = useState('');
+  const [reAuthLoading, setReAuthLoading] = useState(false);
 
   useEffect(() => {
     fetchAccounts();
@@ -170,16 +181,30 @@ export default function AccountsPage() {
     }
   };
 
-  const handleSaveAccount = async (e) => {
-    e.preventDefault();
+  // ===== NEW ACCOUNT FUNCTIONS =====
+  
+  const handleStartAddAccount = async () => {
+    if (!newAccount.phone.trim()) {
+      toast.error('Введите номер телефона');
+      return;
+    }
+    
+    setAuthStep('sending');
+    setAuthLoading(true);
+    
     try {
       const payload = {
-        ...newAccount,
+        phone: newAccount.phone.trim(),
+        name: newAccount.name || null,
         value_usdt: parseFloat(newAccount.value_usdt) || 0,
-        proxy: {
-          ...newAccount.proxy,
-          port: parseInt(newAccount.proxy.port) || 0
-        },
+        proxy: newAccount.proxy.enabled ? {
+          enabled: true,
+          type: newAccount.proxy.type,
+          host: newAccount.proxy.host,
+          port: parseInt(newAccount.proxy.port) || 0,
+          username: newAccount.proxy.username || null,
+          password: newAccount.proxy.password || null
+        } : null,
         limits: {
           max_per_hour: parseInt(newAccount.limits.max_per_hour) || 20,
           max_per_day: parseInt(newAccount.limits.max_per_day) || 100,
@@ -187,37 +212,125 @@ export default function AccountsPage() {
           delay_max: parseInt(newAccount.limits.delay_max) || 90
         }
       };
-
-      if (editingAccount) {
-        await axios.put(`${API}/accounts/${editingAccount.id}`, payload);
-        toast.success('Аккаунт обновлен');
-      } else {
-        await axios.post(`${API}/accounts`, payload);
-        toast.success('Аккаунт добавлен');
-      }
       
-      setDialogOpen(false);
-      setNewAccount(defaultAccount);
+      const response = await axios.post(`${API}/telegram/auth/start-new`, payload);
+      
+      if (response.data.status === 'code_sent') {
+        setTempId(response.data.temp_id);
+        setAuthStep('code_sent');
+        toast.success('SMS код отправлен на ' + newAccount.phone);
+      } else if (response.data.status === 'authorized') {
+        toast.success('Аккаунт уже авторизован и добавлен!');
+        handleCloseAddDialog();
+        fetchAccounts();
+        fetchStats();
+      } else if (response.data.status === 'error') {
+        toast.error(response.data.message);
+        setAuthStep('form');
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Ошибка отправки кода');
+      setAuthStep('form');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+  
+  const handleVerifyNewCode = async () => {
+    if (!authCode.trim()) {
+      toast.error('Введите код');
+      return;
+    }
+    
+    setAuthLoading(true);
+    try {
+      const response = await axios.post(`${API}/telegram/auth/verify-code-new`, {
+        temp_id: tempId,
+        code: authCode.trim()
+      });
+      
+      if (response.data.status === 'authorized') {
+        toast.success('Аккаунт успешно добавлен и авторизован!');
+        handleCloseAddDialog();
+        fetchAccounts();
+        fetchStats();
+      } else if (response.data.status === '2fa_required') {
+        setAuthStep('2fa_required');
+        toast.info('Требуется двухфакторная аутентификация');
+      } else if (response.data.status === 'error') {
+        toast.error(response.data.message);
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Неверный код');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+  
+  const handleVerifyNew2FA = async () => {
+    if (!auth2FA.trim()) {
+      toast.error('Введите пароль 2FA');
+      return;
+    }
+    
+    setAuthLoading(true);
+    try {
+      const response = await axios.post(`${API}/telegram/auth/verify-2fa-new`, {
+        temp_id: tempId,
+        password: auth2FA
+      });
+      
+      if (response.data.status === 'authorized') {
+        toast.success('Аккаунт успешно добавлен!');
+        handleCloseAddDialog();
+        fetchAccounts();
+        fetchStats();
+      } else if (response.data.status === 'error') {
+        toast.error(response.data.message);
+      }
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Неверный пароль');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+  
+  const handleCloseAddDialog = () => {
+    setAddDialogOpen(false);
+    setNewAccount(defaultNewAccount);
+    setAuthStep('form');
+    setTempId(null);
+    setAuthCode('');
+    setAuth2FA('');
+  };
+
+  // ===== EXISTING ACCOUNT FUNCTIONS =====
+
+  const handleEditAccount = (account) => {
+    setEditingAccount(account);
+    setEditDialogOpen(true);
+  };
+  
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    try {
+      const payload = {
+        phone: editingAccount.phone,
+        name: editingAccount.name,
+        value_usdt: parseFloat(editingAccount.value_usdt) || 0,
+        proxy: editingAccount.proxy,
+        limits: editingAccount.limits
+      };
+      
+      await axios.put(`${API}/accounts/${editingAccount.id}`, payload);
+      toast.success('Аккаунт обновлен');
+      setEditDialogOpen(false);
       setEditingAccount(null);
       fetchAccounts();
       fetchStats();
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Ошибка сохранения');
     }
-  };
-
-  const handleEditAccount = (account) => {
-    setEditingAccount(account);
-    setNewAccount({
-      phone: account.phone,
-      name: account.name || '',
-      api_id: '',
-      api_hash: '',
-      value_usdt: account.value_usdt || 0,
-      proxy: account.proxy || defaultAccount.proxy,
-      limits: account.limits || defaultAccount.limits
-    });
-    setDialogOpen(true);
   };
 
   const handleFileUpload = async (e) => {
@@ -264,14 +377,14 @@ export default function AccountsPage() {
     }
   };
 
-  // Telegram Authorization Functions
-  const handleStartAuth = async (account) => {
-    setAuthAccount(account);
-    setAuthDialogOpen(true);
-    setAuthStep('idle');
-    setAuthCode('');
-    setAuth2FA('');
-    setAuthLoading(true);
+  // Re-authorization for existing accounts
+  const handleStartReAuth = async (account) => {
+    setReAuthAccount(account);
+    setReAuthDialogOpen(true);
+    setReAuthStep('idle');
+    setReAuthCode('');
+    setReAuth2FA('');
+    setReAuthLoading(true);
     
     try {
       const response = await axios.post(`${API}/telegram/auth/start`, {
@@ -280,42 +393,42 @@ export default function AccountsPage() {
       
       if (response.data.status === 'authorized') {
         toast.success('Аккаунт уже авторизован!');
-        setAuthDialogOpen(false);
+        setReAuthDialogOpen(false);
         fetchAccounts();
       } else if (response.data.status === 'code_sent') {
-        setAuthStep('code_sent');
+        setReAuthStep('code_sent');
         toast.success('SMS код отправлен');
       } else if (response.data.status === 'error') {
         toast.error(response.data.message);
-        setAuthDialogOpen(false);
+        setReAuthDialogOpen(false);
       }
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Ошибка авторизации');
-      setAuthDialogOpen(false);
+      setReAuthDialogOpen(false);
     } finally {
-      setAuthLoading(false);
+      setReAuthLoading(false);
     }
   };
 
-  const handleVerifyCode = async () => {
-    if (!authCode.trim()) {
+  const handleVerifyReAuthCode = async () => {
+    if (!reAuthCode.trim()) {
       toast.error('Введите код');
       return;
     }
     
-    setAuthLoading(true);
+    setReAuthLoading(true);
     try {
       const response = await axios.post(`${API}/telegram/auth/verify-code`, {
-        account_id: authAccount.id,
-        code: authCode.trim()
+        account_id: reAuthAccount.id,
+        code: reAuthCode.trim()
       });
       
       if (response.data.status === 'authorized') {
         toast.success('Аккаунт успешно авторизован!');
-        setAuthDialogOpen(false);
+        setReAuthDialogOpen(false);
         fetchAccounts();
       } else if (response.data.status === '2fa_required') {
-        setAuthStep('2fa_required');
+        setReAuthStep('2fa_required');
         toast.info('Требуется двухфакторная аутентификация');
       } else if (response.data.status === 'error') {
         toast.error(response.data.message);
@@ -323,26 +436,26 @@ export default function AccountsPage() {
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Неверный код');
     } finally {
-      setAuthLoading(false);
+      setReAuthLoading(false);
     }
   };
 
-  const handleVerify2FA = async () => {
-    if (!auth2FA.trim()) {
+  const handleVerifyReAuth2FA = async () => {
+    if (!reAuth2FA.trim()) {
       toast.error('Введите пароль 2FA');
       return;
     }
     
-    setAuthLoading(true);
+    setReAuthLoading(true);
     try {
       const response = await axios.post(`${API}/telegram/auth/verify-2fa`, {
-        account_id: authAccount.id,
-        password: auth2FA
+        account_id: reAuthAccount.id,
+        password: reAuth2FA
       });
       
       if (response.data.status === 'authorized') {
         toast.success('Аккаунт успешно авторизован!');
-        setAuthDialogOpen(false);
+        setReAuthDialogOpen(false);
         fetchAccounts();
       } else if (response.data.status === 'error') {
         toast.error(response.data.message);
@@ -350,7 +463,7 @@ export default function AccountsPage() {
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Неверный пароль');
     } finally {
-      setAuthLoading(false);
+      setReAuthLoading(false);
     }
   };
 
@@ -382,11 +495,12 @@ export default function AccountsPage() {
             <Upload className="w-4 h-4 mr-2" />
             Импорт
           </Button>
-          <Dialog open={dialogOpen} onOpenChange={(open) => {
-            setDialogOpen(open);
-            if (!open) {
-              setEditingAccount(null);
-              setNewAccount(defaultAccount);
+          
+          {/* Add Account Dialog */}
+          <Dialog open={addDialogOpen} onOpenChange={(open) => {
+            if (!authLoading) {
+              if (!open) handleCloseAddDialog();
+              else setAddDialogOpen(true);
             }
           }}>
             <DialogTrigger asChild>
@@ -400,287 +514,341 @@ export default function AccountsPage() {
             </DialogTrigger>
             <DialogContent className="bg-zinc-900 border-white/10 max-w-lg max-h-[90vh] overflow-y-auto">
               <DialogHeader>
-                <DialogTitle className="text-white font-heading">
-                  {editingAccount ? 'Редактировать аккаунт' : 'Добавить аккаунт'}
+                <DialogTitle className="text-white font-heading flex items-center gap-2">
+                  {authStep === 'form' && (
+                    <>
+                      <Plus className="w-5 h-5 text-sky-400" />
+                      Добавить аккаунт
+                    </>
+                  )}
+                  {(authStep === 'sending' || authStep === 'code_sent' || authStep === '2fa_required') && (
+                    <>
+                      <Key className="w-5 h-5 text-sky-400" />
+                      Авторизация в Telegram
+                    </>
+                  )}
                 </DialogTitle>
               </DialogHeader>
-              <form onSubmit={handleSaveAccount} className="space-y-4 mt-4">
-                <Tabs defaultValue="main" className="w-full">
-                  <TabsList className="grid w-full grid-cols-3 bg-zinc-800">
-                    <TabsTrigger value="main">Основное</TabsTrigger>
-                    <TabsTrigger value="proxy">Прокси</TabsTrigger>
-                    <TabsTrigger value="limits">Лимиты</TabsTrigger>
-                  </TabsList>
-                  
-                  <TabsContent value="main" className="space-y-4 mt-4">
-                    <div className="space-y-2">
-                      <Label className="text-zinc-300">Номер телефона *</Label>
-                      <Input
-                        data-testid="account-phone-input"
-                        value={newAccount.phone}
-                        onChange={(e) => setNewAccount({ ...newAccount, phone: e.target.value })}
-                        placeholder="+7 999 123 4567"
-                        className="bg-zinc-950 border-white/10 text-white"
-                        required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label className="text-zinc-300">Название</Label>
-                      <Input
-                        data-testid="account-name-input"
-                        value={newAccount.name}
-                        onChange={(e) => setNewAccount({ ...newAccount, name: e.target.value })}
-                        placeholder="Рабочий аккаунт #1"
-                        className="bg-zinc-950 border-white/10 text-white"
-                      />
-                    </div>
+              
+              {authStep === 'form' && (
+                <div className="space-y-4 mt-4">
+                  <Tabs defaultValue="main" className="w-full">
+                    <TabsList className="grid w-full grid-cols-3 bg-zinc-800">
+                      <TabsTrigger value="main">Основное</TabsTrigger>
+                      <TabsTrigger value="proxy">Прокси</TabsTrigger>
+                      <TabsTrigger value="limits">Лимиты</TabsTrigger>
+                    </TabsList>
                     
-                    {/* Value USDT */}
-                    <div className="space-y-2">
-                      <Label className="text-zinc-300 flex items-center gap-2">
-                        <Wallet className="w-4 h-4 text-emerald-400" />
-                        Стоимость аккаунта (USDT)
-                      </Label>
-                      <Input
-                        data-testid="account-value-input"
-                        type="number"
-                        step="0.01"
-                        value={newAccount.value_usdt}
-                        onChange={(e) => setNewAccount({ ...newAccount, value_usdt: e.target.value })}
-                        placeholder="0"
-                        className="bg-zinc-950 border-white/10 text-white"
-                      />
-                      <div className="flex gap-2 mt-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setNewAccount({ ...newAccount, value_usdt: 100 })}
-                          className="border-zinc-500/20 text-zinc-400 hover:bg-zinc-500/10"
-                        >
-                          100
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setNewAccount({ ...newAccount, value_usdt: 300 })}
-                          className="border-amber-500/20 text-amber-400 hover:bg-amber-500/10"
-                        >
-                          300
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setNewAccount({ ...newAccount, value_usdt: 500 })}
-                          className="border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/10"
-                        >
-                          500
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setNewAccount({ ...newAccount, value_usdt: 1000 })}
-                          className="border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/10"
-                        >
-                          1000+
-                        </Button>
-                      </div>
-                    </div>
-                    
-                    <div className="grid grid-cols-2 gap-4">
+                    <TabsContent value="main" className="space-y-4 mt-4">
                       <div className="space-y-2">
-                        <Label className="text-zinc-300">API ID</Label>
+                        <Label className="text-zinc-300">Номер телефона *</Label>
                         <Input
-                          data-testid="account-api-id-input"
-                          value={newAccount.api_id}
-                          onChange={(e) => setNewAccount({ ...newAccount, api_id: e.target.value })}
-                          placeholder="12345678"
+                          data-testid="account-phone-input"
+                          value={newAccount.phone}
+                          onChange={(e) => setNewAccount({ ...newAccount, phone: e.target.value })}
+                          placeholder="+7 999 123 4567"
                           className="bg-zinc-950 border-white/10 text-white"
+                          required
                         />
                       </div>
                       <div className="space-y-2">
-                        <Label className="text-zinc-300">API Hash</Label>
+                        <Label className="text-zinc-300">Название</Label>
                         <Input
-                          data-testid="account-api-hash-input"
-                          value={newAccount.api_hash}
-                          onChange={(e) => setNewAccount({ ...newAccount, api_hash: e.target.value })}
-                          placeholder="abc123..."
+                          data-testid="account-name-input"
+                          value={newAccount.name}
+                          onChange={(e) => setNewAccount({ ...newAccount, name: e.target.value })}
+                          placeholder="Рабочий аккаунт #1"
                           className="bg-zinc-950 border-white/10 text-white"
                         />
                       </div>
-                    </div>
-                    <p className="text-xs text-zinc-500">
-                      Получите API ID и Hash на <a href="https://my.telegram.org" target="_blank" rel="noopener noreferrer" className="text-sky-400 hover:underline">my.telegram.org</a>
-                    </p>
-                  </TabsContent>
-                  
-                  <TabsContent value="proxy" className="space-y-4 mt-4">
-                    <div className="flex items-center justify-between">
-                      <Label className="text-zinc-300">Использовать прокси</Label>
-                      <Switch
-                        data-testid="proxy-enabled-switch"
-                        checked={newAccount.proxy.enabled}
-                        onCheckedChange={(checked) => setNewAccount({
-                          ...newAccount,
-                          proxy: { ...newAccount.proxy, enabled: checked }
-                        })}
-                      />
-                    </div>
+                      
+                      <div className="space-y-2">
+                        <Label className="text-zinc-300 flex items-center gap-2">
+                          <Wallet className="w-4 h-4 text-emerald-400" />
+                          Стоимость аккаунта (USDT)
+                        </Label>
+                        <Input
+                          data-testid="account-value-input"
+                          type="number"
+                          step="0.01"
+                          value={newAccount.value_usdt}
+                          onChange={(e) => setNewAccount({ ...newAccount, value_usdt: e.target.value })}
+                          placeholder="0"
+                          className="bg-zinc-950 border-white/10 text-white"
+                        />
+                        <div className="flex gap-2 mt-2">
+                          <Button type="button" variant="outline" size="sm"
+                            onClick={() => setNewAccount({ ...newAccount, value_usdt: 100 })}
+                            className="border-zinc-500/20 text-zinc-400 hover:bg-zinc-500/10">
+                            100
+                          </Button>
+                          <Button type="button" variant="outline" size="sm"
+                            onClick={() => setNewAccount({ ...newAccount, value_usdt: 300 })}
+                            className="border-amber-500/20 text-amber-400 hover:bg-amber-500/10">
+                            300
+                          </Button>
+                          <Button type="button" variant="outline" size="sm"
+                            onClick={() => setNewAccount({ ...newAccount, value_usdt: 500 })}
+                            className="border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/10">
+                            500
+                          </Button>
+                          <Button type="button" variant="outline" size="sm"
+                            onClick={() => setNewAccount({ ...newAccount, value_usdt: 1000 })}
+                            className="border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/10">
+                            1000+
+                          </Button>
+                        </div>
+                      </div>
+                      
+                      <div className="p-3 bg-sky-500/10 border border-sky-500/20 rounded-lg">
+                        <p className="text-sky-400 text-sm flex items-center gap-2">
+                          <Fingerprint className="w-4 h-4" />
+                          Уникальный отпечаток устройства будет сгенерирован автоматически
+                        </p>
+                      </div>
+                    </TabsContent>
                     
-                    {newAccount.proxy.enabled && (
-                      <>
+                    <TabsContent value="proxy" className="space-y-4 mt-4">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-zinc-300">Использовать прокси</Label>
+                        <Switch
+                          data-testid="proxy-enabled-switch"
+                          checked={newAccount.proxy.enabled}
+                          onCheckedChange={(checked) => setNewAccount({
+                            ...newAccount,
+                            proxy: { ...newAccount.proxy, enabled: checked }
+                          })}
+                        />
+                      </div>
+                      
+                      {newAccount.proxy.enabled && (
+                        <>
+                          <div className="space-y-2">
+                            <Label className="text-zinc-300">Тип прокси</Label>
+                            <Select 
+                              value={newAccount.proxy.type} 
+                              onValueChange={(value) => setNewAccount({
+                                ...newAccount,
+                                proxy: { ...newAccount.proxy, type: value }
+                              })}
+                            >
+                              <SelectTrigger className="bg-zinc-950 border-white/10 text-white">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent className="bg-zinc-900 border-white/10">
+                                <SelectItem value="socks5">SOCKS5</SelectItem>
+                                <SelectItem value="socks4">SOCKS4</SelectItem>
+                                <SelectItem value="http">HTTP</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label className="text-zinc-300">Хост</Label>
+                              <Input
+                                value={newAccount.proxy.host}
+                                onChange={(e) => setNewAccount({
+                                  ...newAccount,
+                                  proxy: { ...newAccount.proxy, host: e.target.value }
+                                })}
+                                placeholder="proxy.example.com"
+                                className="bg-zinc-950 border-white/10 text-white"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label className="text-zinc-300">Порт</Label>
+                              <Input
+                                type="number"
+                                value={newAccount.proxy.port}
+                                onChange={(e) => setNewAccount({
+                                  ...newAccount,
+                                  proxy: { ...newAccount.proxy, port: e.target.value }
+                                })}
+                                placeholder="1080"
+                                className="bg-zinc-950 border-white/10 text-white"
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Label className="text-zinc-300">Логин</Label>
+                              <Input
+                                value={newAccount.proxy.username}
+                                onChange={(e) => setNewAccount({
+                                  ...newAccount,
+                                  proxy: { ...newAccount.proxy, username: e.target.value }
+                                })}
+                                placeholder="username"
+                                className="bg-zinc-950 border-white/10 text-white"
+                              />
+                            </div>
+                            <div className="space-y-2">
+                              <Label className="text-zinc-300">Пароль</Label>
+                              <Input
+                                type="password"
+                                value={newAccount.proxy.password}
+                                onChange={(e) => setNewAccount({
+                                  ...newAccount,
+                                  proxy: { ...newAccount.proxy, password: e.target.value }
+                                })}
+                                placeholder="password"
+                                className="bg-zinc-950 border-white/10 text-white"
+                              />
+                            </div>
+                          </div>
+                        </>
+                      )}
+                    </TabsContent>
+                    
+                    <TabsContent value="limits" className="space-y-4 mt-4">
+                      <div className="grid grid-cols-2 gap-4">
                         <div className="space-y-2">
-                          <Label className="text-zinc-300">Тип прокси</Label>
-                          <Select 
-                            value={newAccount.proxy.type} 
-                            onValueChange={(value) => setNewAccount({
+                          <Label className="text-zinc-300">Макс. в час</Label>
+                          <Input
+                            type="number"
+                            value={newAccount.limits.max_per_hour}
+                            onChange={(e) => setNewAccount({
                               ...newAccount,
-                              proxy: { ...newAccount.proxy, type: value }
+                              limits: { ...newAccount.limits, max_per_hour: e.target.value }
                             })}
-                          >
-                            <SelectTrigger className="bg-zinc-950 border-white/10 text-white">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent className="bg-zinc-900 border-white/10">
-                              <SelectItem value="socks5">SOCKS5</SelectItem>
-                              <SelectItem value="socks4">SOCKS4</SelectItem>
-                              <SelectItem value="http">HTTP</SelectItem>
-                            </SelectContent>
-                          </Select>
+                            className="bg-zinc-950 border-white/10 text-white"
+                          />
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label className="text-zinc-300">Хост</Label>
-                            <Input
-                              data-testid="proxy-host-input"
-                              value={newAccount.proxy.host}
-                              onChange={(e) => setNewAccount({
-                                ...newAccount,
-                                proxy: { ...newAccount.proxy, host: e.target.value }
-                              })}
-                              placeholder="proxy.example.com"
-                              className="bg-zinc-950 border-white/10 text-white"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label className="text-zinc-300">Порт</Label>
-                            <Input
-                              data-testid="proxy-port-input"
-                              type="number"
-                              value={newAccount.proxy.port}
-                              onChange={(e) => setNewAccount({
-                                ...newAccount,
-                                proxy: { ...newAccount.proxy, port: e.target.value }
-                              })}
-                              placeholder="1080"
-                              className="bg-zinc-950 border-white/10 text-white"
-                            />
-                          </div>
+                        <div className="space-y-2">
+                          <Label className="text-zinc-300">Макс. в день</Label>
+                          <Input
+                            type="number"
+                            value={newAccount.limits.max_per_day}
+                            onChange={(e) => setNewAccount({
+                              ...newAccount,
+                              limits: { ...newAccount.limits, max_per_day: e.target.value }
+                            })}
+                            className="bg-zinc-950 border-white/10 text-white"
+                          />
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="space-y-2">
-                            <Label className="text-zinc-300">Логин</Label>
-                            <Input
-                              data-testid="proxy-username-input"
-                              value={newAccount.proxy.username}
-                              onChange={(e) => setNewAccount({
-                                ...newAccount,
-                                proxy: { ...newAccount.proxy, username: e.target.value }
-                              })}
-                              placeholder="username"
-                              className="bg-zinc-950 border-white/10 text-white"
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label className="text-zinc-300">Пароль</Label>
-                            <Input
-                              data-testid="proxy-password-input"
-                              type="password"
-                              value={newAccount.proxy.password}
-                              onChange={(e) => setNewAccount({
-                                ...newAccount,
-                                proxy: { ...newAccount.proxy, password: e.target.value }
-                              })}
-                              placeholder="••••••••"
-                              className="bg-zinc-950 border-white/10 text-white"
-                            />
-                          </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="space-y-2">
+                          <Label className="text-zinc-300">Задержка мин (сек)</Label>
+                          <Input
+                            type="number"
+                            value={newAccount.limits.delay_min}
+                            onChange={(e) => setNewAccount({
+                              ...newAccount,
+                              limits: { ...newAccount.limits, delay_min: e.target.value }
+                            })}
+                            className="bg-zinc-950 border-white/10 text-white"
+                          />
                         </div>
+                        <div className="space-y-2">
+                          <Label className="text-zinc-300">Задержка макс (сек)</Label>
+                          <Input
+                            type="number"
+                            value={newAccount.limits.delay_max}
+                            onChange={(e) => setNewAccount({
+                              ...newAccount,
+                              limits: { ...newAccount.limits, delay_max: e.target.value }
+                            })}
+                            className="bg-zinc-950 border-white/10 text-white"
+                          />
+                        </div>
+                      </div>
+                    </TabsContent>
+                  </Tabs>
+                  
+                  <Button 
+                    onClick={handleStartAddAccount}
+                    className="w-full bg-sky-500 hover:bg-sky-600"
+                  >
+                    <Key className="w-4 h-4 mr-2" />
+                    Отправить код авторизации
+                  </Button>
+                </div>
+              )}
+              
+              {authStep === 'sending' && (
+                <div className="flex items-center justify-center gap-3 py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-sky-400" />
+                  <span className="text-zinc-300">Отправка SMS кода...</span>
+                </div>
+              )}
+              
+              {authStep === 'code_sent' && (
+                <div className="space-y-4 mt-4">
+                  <div className="p-3 bg-zinc-950 rounded-lg border border-white/10">
+                    <p className="text-sm text-zinc-400">Телефон:</p>
+                    <p className="font-mono text-sky-400">{newAccount.phone}</p>
+                  </div>
+                  
+                  <div className="space-y-2">
+                    <Label className="text-zinc-300">SMS код</Label>
+                    <Input
+                      data-testid="auth-code-input"
+                      value={authCode}
+                      onChange={(e) => setAuthCode(e.target.value)}
+                      placeholder="12345"
+                      className="bg-zinc-950 border-white/10 text-white text-center text-2xl tracking-widest"
+                      maxLength={6}
+                      autoFocus
+                    />
+                    <p className="text-xs text-zinc-500">Введите код из SMS</p>
+                  </div>
+                  <Button
+                    onClick={handleVerifyNewCode}
+                    disabled={authLoading}
+                    className="w-full bg-sky-500 hover:bg-sky-600"
+                  >
+                    {authLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Проверка...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="w-4 h-4 mr-2" />
+                        Подтвердить код
                       </>
                     )}
-                  </TabsContent>
-                  
-                  <TabsContent value="limits" className="space-y-4 mt-4">
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label className="text-zinc-300">Макс. в час</Label>
-                        <Input
-                          data-testid="limit-per-hour-input"
-                          type="number"
-                          value={newAccount.limits.max_per_hour}
-                          onChange={(e) => setNewAccount({
-                            ...newAccount,
-                            limits: { ...newAccount.limits, max_per_hour: e.target.value }
-                          })}
-                          className="bg-zinc-950 border-white/10 text-white"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label className="text-zinc-300">Макс. в день</Label>
-                        <Input
-                          data-testid="limit-per-day-input"
-                          type="number"
-                          value={newAccount.limits.max_per_day}
-                          onChange={(e) => setNewAccount({
-                            ...newAccount,
-                            limits: { ...newAccount.limits, max_per_day: e.target.value }
-                          })}
-                          className="bg-zinc-950 border-white/10 text-white"
-                        />
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label className="text-zinc-300">Задержка мин (сек)</Label>
-                        <Input
-                          data-testid="delay-min-input"
-                          type="number"
-                          value={newAccount.limits.delay_min}
-                          onChange={(e) => setNewAccount({
-                            ...newAccount,
-                            limits: { ...newAccount.limits, delay_min: e.target.value }
-                          })}
-                          className="bg-zinc-950 border-white/10 text-white"
-                        />
-                      </div>
-                      <div className="space-y-2">
-                        <Label className="text-zinc-300">Задержка макс (сек)</Label>
-                        <Input
-                          data-testid="delay-max-input"
-                          type="number"
-                          value={newAccount.limits.delay_max}
-                          onChange={(e) => setNewAccount({
-                            ...newAccount,
-                            limits: { ...newAccount.limits, delay_max: e.target.value }
-                          })}
-                          className="bg-zinc-950 border-white/10 text-white"
-                        />
-                      </div>
-                    </div>
-                  </TabsContent>
-                </Tabs>
-                
-                <Button 
-                  type="submit" 
-                  data-testid="save-account-btn"
-                  className="w-full bg-sky-500 hover:bg-sky-600"
-                >
-                  {editingAccount ? 'Сохранить изменения' : 'Добавить аккаунт'}
-                </Button>
-              </form>
+                  </Button>
+                </div>
+              )}
+              
+              {authStep === '2fa_required' && (
+                <div className="space-y-4 mt-4">
+                  <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                    <p className="text-amber-400 text-sm">Включена двухфакторная аутентификация</p>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-zinc-300">Пароль 2FA</Label>
+                    <Input
+                      data-testid="auth-2fa-input"
+                      type="password"
+                      value={auth2FA}
+                      onChange={(e) => setAuth2FA(e.target.value)}
+                      placeholder="password"
+                      className="bg-zinc-950 border-white/10 text-white"
+                      autoFocus
+                    />
+                  </div>
+                  <Button
+                    onClick={handleVerifyNew2FA}
+                    disabled={authLoading}
+                    className="w-full bg-sky-500 hover:bg-sky-600"
+                  >
+                    {authLoading ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Проверка...
+                      </>
+                    ) : (
+                      <>
+                        <Key className="w-4 h-4 mr-2" />
+                        Войти
+                      </>
+                    )}
+                  </Button>
+                </div>
+              )}
             </DialogContent>
           </Dialog>
         </div>
@@ -689,31 +857,19 @@ export default function AccountsPage() {
       {/* Price Category Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="bg-zinc-800 border border-white/10 p-1">
-          <TabsTrigger 
-            value="all" 
-            className="data-[state=active]:bg-sky-500/20 data-[state=active]:text-sky-400"
-          >
+          <TabsTrigger value="all" className="data-[state=active]:bg-sky-500/20 data-[state=active]:text-sky-400">
             <Users className="w-4 h-4 mr-2" />
             Все ({stats.total})
           </TabsTrigger>
-          <TabsTrigger 
-            value="low" 
-            className="data-[state=active]:bg-zinc-500/20 data-[state=active]:text-zinc-300"
-          >
+          <TabsTrigger value="low" className="data-[state=active]:bg-zinc-500/20 data-[state=active]:text-zinc-300">
             <DollarSign className="w-4 h-4 mr-1" />
             до 300$ ({stats.low})
           </TabsTrigger>
-          <TabsTrigger 
-            value="medium" 
-            className="data-[state=active]:bg-amber-500/20 data-[state=active]:text-amber-400"
-          >
+          <TabsTrigger value="medium" className="data-[state=active]:bg-amber-500/20 data-[state=active]:text-amber-400">
             <DollarSign className="w-4 h-4 mr-1" />
             300-500$ ({stats.medium})
           </TabsTrigger>
-          <TabsTrigger 
-            value="high" 
-            className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400"
-          >
+          <TabsTrigger value="high" className="data-[state=active]:bg-emerald-500/20 data-[state=active]:text-emerald-400">
             <DollarSign className="w-4 h-4 mr-1" />
             500$+ ({stats.high})
           </TabsTrigger>
@@ -854,7 +1010,7 @@ export default function AccountsPage() {
                             <DropdownMenuContent align="end" className="bg-zinc-900 border-white/10">
                               {account.status !== 'active' && (
                                 <DropdownMenuItem 
-                                  onClick={() => handleStartAuth(account)}
+                                  onClick={() => handleStartReAuth(account)}
                                   className="text-sky-400 focus:text-sky-400"
                                 >
                                   <Key className="w-4 h-4 mr-2" />
@@ -906,14 +1062,47 @@ export default function AccountsPage() {
         </motion.div>
       </Tabs>
 
-      {/* Telegram Auth Dialog */}
-      <Dialog open={authDialogOpen} onOpenChange={(open) => {
-        if (!authLoading) {
-          setAuthDialogOpen(open);
+      {/* Edit Account Dialog */}
+      <Dialog open={editDialogOpen} onOpenChange={setEditDialogOpen}>
+        <DialogContent className="bg-zinc-900 border-white/10 max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-white font-heading">Редактировать аккаунт</DialogTitle>
+          </DialogHeader>
+          {editingAccount && (
+            <form onSubmit={handleSaveEdit} className="space-y-4 mt-4">
+              <div className="space-y-2">
+                <Label className="text-zinc-300">Название</Label>
+                <Input
+                  value={editingAccount.name || ''}
+                  onChange={(e) => setEditingAccount({ ...editingAccount, name: e.target.value })}
+                  className="bg-zinc-950 border-white/10 text-white"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-zinc-300">Стоимость (USDT)</Label>
+                <Input
+                  type="number"
+                  value={editingAccount.value_usdt || 0}
+                  onChange={(e) => setEditingAccount({ ...editingAccount, value_usdt: e.target.value })}
+                  className="bg-zinc-950 border-white/10 text-white"
+                />
+              </div>
+              <Button type="submit" className="w-full bg-sky-500 hover:bg-sky-600">
+                Сохранить изменения
+              </Button>
+            </form>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Re-Auth Dialog for Existing Accounts */}
+      <Dialog open={reAuthDialogOpen} onOpenChange={(open) => {
+        if (!reAuthLoading) {
+          setReAuthDialogOpen(open);
           if (!open) {
-            setAuthStep('idle');
-            setAuthCode('');
-            setAuth2FA('');
+            setReAuthStep('idle');
+            setReAuthCode('');
+            setReAuth2FA('');
           }
         }
       }}>
@@ -926,42 +1115,40 @@ export default function AccountsPage() {
           </DialogHeader>
           
           <div className="space-y-4 mt-4">
-            {authAccount && (
+            {reAuthAccount && (
               <div className="p-3 bg-zinc-950 rounded-lg border border-white/10">
                 <p className="text-sm text-zinc-400">Аккаунт:</p>
-                <p className="font-mono text-sky-400">{authAccount.phone}</p>
-                {authAccount.name && <p className="text-zinc-300">{authAccount.name}</p>}
+                <p className="font-mono text-sky-400">{reAuthAccount.phone}</p>
+                {reAuthAccount.name && <p className="text-zinc-300">{reAuthAccount.name}</p>}
               </div>
             )}
             
-            {authStep === 'idle' && authLoading && (
+            {reAuthStep === 'idle' && reAuthLoading && (
               <div className="flex items-center justify-center gap-3 py-8">
                 <Loader2 className="w-6 h-6 animate-spin text-sky-400" />
                 <span className="text-zinc-300">Отправка SMS кода...</span>
               </div>
             )}
             
-            {authStep === 'code_sent' && (
+            {reAuthStep === 'code_sent' && (
               <div className="space-y-4">
                 <div className="space-y-2">
                   <Label className="text-zinc-300">SMS код</Label>
                   <Input
-                    data-testid="auth-code-input"
-                    value={authCode}
-                    onChange={(e) => setAuthCode(e.target.value)}
+                    value={reAuthCode}
+                    onChange={(e) => setReAuthCode(e.target.value)}
                     placeholder="12345"
                     className="bg-zinc-950 border-white/10 text-white text-center text-2xl tracking-widest"
                     maxLength={6}
                     autoFocus
                   />
-                  <p className="text-xs text-zinc-500">Введите код из SMS</p>
                 </div>
                 <Button
-                  onClick={handleVerifyCode}
-                  disabled={authLoading}
+                  onClick={handleVerifyReAuthCode}
+                  disabled={reAuthLoading}
                   className="w-full bg-sky-500 hover:bg-sky-600"
                 >
-                  {authLoading ? (
+                  {reAuthLoading ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                       Проверка...
@@ -976,7 +1163,7 @@ export default function AccountsPage() {
               </div>
             )}
             
-            {authStep === '2fa_required' && (
+            {reAuthStep === '2fa_required' && (
               <div className="space-y-4">
                 <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
                   <p className="text-amber-400 text-sm">Включена двухфакторная аутентификация</p>
@@ -984,21 +1171,20 @@ export default function AccountsPage() {
                 <div className="space-y-2">
                   <Label className="text-zinc-300">Пароль 2FA</Label>
                   <Input
-                    data-testid="auth-2fa-input"
                     type="password"
-                    value={auth2FA}
-                    onChange={(e) => setAuth2FA(e.target.value)}
-                    placeholder="••••••••"
+                    value={reAuth2FA}
+                    onChange={(e) => setReAuth2FA(e.target.value)}
+                    placeholder="password"
                     className="bg-zinc-950 border-white/10 text-white"
                     autoFocus
                   />
                 </div>
                 <Button
-                  onClick={handleVerify2FA}
-                  disabled={authLoading}
+                  onClick={handleVerifyReAuth2FA}
+                  disabled={reAuthLoading}
                   className="w-full bg-sky-500 hover:bg-sky-600"
                 >
-                  {authLoading ? (
+                  {reAuthLoading ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                       Проверка...
