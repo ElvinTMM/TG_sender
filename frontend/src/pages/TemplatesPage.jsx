@@ -179,7 +179,7 @@ export default function TemplatesPage() {
               Создать шаблон
             </Button>
           </DialogTrigger>
-          <DialogContent className="bg-zinc-900 border-white/10 max-w-2xl">
+          <DialogContent className="bg-zinc-900 border-white/10 max-w-2xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle className="text-white font-heading">
                 {editingTemplate ? 'Редактировать шаблон' : 'Новый шаблон'}
