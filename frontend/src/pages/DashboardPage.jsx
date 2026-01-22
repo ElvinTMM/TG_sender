@@ -232,6 +232,13 @@ export default function DashboardPage() {
               </div>
               <div className="flex items-center justify-between p-2 bg-zinc-800/50 rounded-lg">
                 <div className="flex items-center gap-2">
+                  <Eye className="w-4 h-4 text-amber-400" strokeWidth={1.5} />
+                  <span className="text-zinc-300 text-sm">Прочитали без ответа</span>
+                </div>
+                <span className="font-mono text-sm text-amber-400">{analytics?.read_no_reply_rate || 0}%</span>
+              </div>
+              <div className="flex items-center justify-between p-2 bg-zinc-800/50 rounded-lg">
+                <div className="flex items-center gap-2">
                   <XCircle className="w-4 h-4 text-red-400" strokeWidth={1.5} />
                   <span className="text-zinc-300 text-sm">Заблокировано</span>
                 </div>
@@ -264,6 +271,16 @@ export default function DashboardPage() {
               >
                 <Phone className="w-4 h-4 mr-2" />
                 Загрузить контакты
+              </Button>
+              <Button 
+                variant="ghost" 
+                size="sm"
+                className="w-full justify-start text-zinc-400 hover:text-white hover:bg-white/5"
+                onClick={() => navigate('/analytics')}
+                data-testid="quick-analytics-btn"
+              >
+                <TrendingUp className="w-4 h-4 mr-2" />
+                Аналитика
               </Button>
             </CardContent>
           </Card>
