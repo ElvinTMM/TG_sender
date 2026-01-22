@@ -12,7 +12,8 @@ import {
   MessageSquare,
   TrendingUp,
   ArrowRight,
-  Activity
+  Activity,
+  Eye
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
